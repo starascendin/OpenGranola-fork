@@ -42,6 +42,16 @@ final class SuggestionEngine {
         self.settings = settings
     }
 
+    func clearSession() {
+        currentTask?.cancel()
+        currentTask = nil
+        suggestions.removeAll()
+        lastDecision = nil
+        lastProcessedUtteranceID = nil
+        lastSuggestionTime = nil
+        isGenerating = false
+    }
+
     /// Called when a new THEM utterance is finalized.
     func onThemUtterance(_ utterance: Utterance) {
         guard utterance.id != lastProcessedUtteranceID else { return }

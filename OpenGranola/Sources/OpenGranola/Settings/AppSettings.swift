@@ -4,6 +4,25 @@ import Observation
 import Security
 import CoreAudio
 
+// MARK: - Transcription provider
+
+enum TranscriptionProvider: String, CaseIterable {
+    case local = "local"
+    case groq  = "groq"
+    case zai   = "zai"
+
+    var displayName: String {
+        switch self {
+        case .local: return "Local (Parakeet-TDT v2)"
+        case .groq:  return "Groq — Whisper large-v3"
+        case .zai:   return "ZhipuAI — GLM-ASR-2512"
+        }
+    }
+
+    /// Whether this provider uses a remote API (requires an API key).
+    var isRemote: Bool { self != .local }
+}
+
 @Observable
 @MainActor
 final class AppSettings {
@@ -15,8 +34,14 @@ final class AppSettings {
         didSet { UserDefaults.standard.set(selectedModel, forKey: "selectedModel") }
     }
 
-    var transcriptionLocale: String {
-        didSet { UserDefaults.standard.set(transcriptionLocale, forKey: "transcriptionLocale") }
+    /// Stored as raw string in UserDefaults.
+    var transcriptionProvider: TranscriptionProvider {
+        didSet { UserDefaults.standard.set(transcriptionProvider.rawValue, forKey: "transcriptionProvider") }
+    }
+
+    /// ISO 639-1 language code for remote transcription, e.g. "zh" or "en". Empty = auto-detect.
+    var transcriptionLanguage: String {
+        didSet { UserDefaults.standard.set(transcriptionLanguage, forKey: "transcriptionLanguage") }
     }
 
     /// Stored as the AudioDeviceID integer. 0 means "use system default".
@@ -32,6 +57,23 @@ final class AppSettings {
         didSet { KeychainHelper.save(key: "voyageApiKey", value: voyageApiKey) }
     }
 
+    var groqApiKey: String {
+        didSet { KeychainHelper.save(key: "groqApiKey", value: groqApiKey) }
+    }
+
+    var zaiApiKey: String {
+        didSet { KeychainHelper.save(key: "zaiApiKey", value: zaiApiKey) }
+    }
+
+    var saveAudio: Bool {
+        didSet { UserDefaults.standard.set(saveAudio, forKey: "saveAudio") }
+    }
+
+    /// When true, automatically start/stop recording when a meeting is detected.
+    var autoDetectMeetings: Bool {
+        didSet { UserDefaults.standard.set(autoDetectMeetings, forKey: "autoDetectMeetings") }
+    }
+
     /// When true, all app windows are invisible to screen sharing / recording.
     var hideFromScreenShare: Bool {
         didSet {
@@ -44,10 +86,18 @@ final class AppSettings {
         let defaults = UserDefaults.standard
         self.kbFolderPath = defaults.string(forKey: "kbFolderPath") ?? ""
         self.selectedModel = defaults.string(forKey: "selectedModel") ?? "anthropic/claude-sonnet-4"
-        self.transcriptionLocale = defaults.string(forKey: "transcriptionLocale") ?? "en-US"
+        let providerRaw = defaults.string(forKey: "transcriptionProvider") ?? "groq"
+        self.transcriptionProvider = TranscriptionProvider(rawValue: providerRaw) ?? .local
+        self.transcriptionLanguage = defaults.string(forKey: "transcriptionLanguage") ?? ""
         self.inputDeviceID = AudioDeviceID(defaults.integer(forKey: "inputDeviceID"))
+        self.saveAudio = defaults.bool(forKey: "saveAudio")
+        self.autoDetectMeetings = defaults.object(forKey: "autoDetectMeetings") == nil
+            ? true
+            : defaults.bool(forKey: "autoDetectMeetings")
         self.openRouterApiKey = KeychainHelper.load(key: "openRouterApiKey") ?? ""
         self.voyageApiKey = KeychainHelper.load(key: "voyageApiKey") ?? ""
+        self.groqApiKey = KeychainHelper.load(key: "groqApiKey") ?? ""
+        self.zaiApiKey = KeychainHelper.load(key: "zaiApiKey") ?? ""
         // Default to true (hidden) if key has never been set
         if defaults.object(forKey: "hideFromScreenShare") == nil {
             self.hideFromScreenShare = true
@@ -68,11 +118,6 @@ final class AppSettings {
         guard !kbFolderPath.isEmpty else { return nil }
         return URL(fileURLWithPath: kbFolderPath)
     }
-
-    var locale: Locale {
-        Locale(identifier: transcriptionLocale)
-    }
-
 }
 
 // MARK: - Keychain Helper

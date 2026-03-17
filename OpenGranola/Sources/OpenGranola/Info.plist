@@ -26,5 +26,7 @@
     <string>OpenGranola needs screen capture permission to capture system audio from other participants.</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.productivity</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>OpenGranola uses calendar access to automatically name your meeting recordings after the corresponding calendar event.</string>
 </dict>
 </plist>

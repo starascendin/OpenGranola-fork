@@ -44,11 +44,58 @@ struct SettingsView: View {
                     }
                 }
                 .font(.system(size: 12))
+
+                Toggle("Save mic audio to file", isOn: $settings.saveAudio)
+                    .font(.system(size: 12))
+                Text("Recordings saved to ~/Documents/OpenGranola/recordings/")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
 
             Section("Transcription") {
-                TextField("Locale (e.g. en-US)", text: $settings.transcriptionLocale)
-                    .font(.system(size: 12, design: .monospaced))
+                Picker("Engine", selection: $settings.transcriptionProvider) {
+                    ForEach(TranscriptionProvider.allCases, id: \.self) { provider in
+                        Text(provider.displayName).tag(provider)
+                    }
+                }
+                .font(.system(size: 12))
+
+                if settings.transcriptionProvider == .groq {
+                    SecureField("Groq API Key", text: $settings.groqApiKey)
+                        .font(.system(size: 12, design: .monospaced))
+                }
+
+                if settings.transcriptionProvider == .zai {
+                    SecureField("ZhipuAI API Key", text: $settings.zaiApiKey)
+                        .font(.system(size: 12, design: .monospaced))
+                }
+
+                if settings.transcriptionProvider.isRemote {
+                    Picker("Language", selection: $settings.transcriptionLanguage) {
+                        Text("Auto-detect").tag("")
+                        Text("Mandarin Chinese (zh)").tag("zh")
+                        Text("English (en)").tag("en")
+                        Text("Cantonese (yue)").tag("yue")
+                        Text("Japanese (ja)").tag("ja")
+                        Text("Korean (ko)").tag("ko")
+                    }
+                    .font(.system(size: 12))
+                    Text("Specify a language for faster, more accurate transcription.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Local engine (English only). Switch to Groq or ZhipuAI for Mandarin.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Meeting Detection") {
+                Toggle("Auto-detect meetings", isOn: $settings.autoDetectMeetings)
+                    .font(.system(size: 12))
+                Text("Automatically starts recording when Zoom, Google Meet, Teams, FaceTime, or Webex is detected.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
 
             Section("Privacy") {
@@ -58,9 +105,9 @@ struct SettingsView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
-}
+        }
         .formStyle(.grouped)
-        .frame(width: 450, height: 400)
+        .frame(width: 450, height: 580)
         .onAppear {
             inputDevices = MicCapture.availableInputDevices()
         }

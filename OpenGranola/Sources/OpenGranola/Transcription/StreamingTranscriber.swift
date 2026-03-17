@@ -2,10 +2,20 @@
 import FluidAudio
 import os
 
+// MARK: - ASR backend abstraction
+
+/// Selects which ASR engine transcribes a speech segment.
+enum ASRBackend: @unchecked Sendable {
+    /// On-device Parakeet-TDT via FluidAudio (English-focused).
+    case local(AsrManager)
+    /// Remote Whisper-compatible API (multilingual — Groq, ZhipuAI, etc.).
+    case remote(WhisperAPIClient)
+}
+
 /// Consumes an audio buffer stream, detects speech via Silero VAD,
-/// and transcribes completed speech segments via Parakeet-TDT.
+/// and transcribes completed speech segments via the chosen ASR backend.
 final class StreamingTranscriber: @unchecked Sendable {
-    private let asrManager: AsrManager
+    private let backend: ASRBackend
     private let vadManager: VadManager
     private let speaker: Speaker
     private let onPartial: @Sendable (String) -> Void
@@ -22,13 +32,13 @@ final class StreamingTranscriber: @unchecked Sendable {
     )!
 
     init(
-        asrManager: AsrManager,
+        backend: ASRBackend,
         vadManager: VadManager,
         speaker: Speaker,
         onPartial: @escaping @Sendable (String) -> Void,
         onFinal: @escaping @Sendable (String) -> Void
     ) {
-        self.asrManager = asrManager
+        self.backend = backend
         self.vadManager = vadManager
         self.speaker = speaker
         self.onPartial = onPartial
@@ -120,14 +130,22 @@ final class StreamingTranscriber: @unchecked Sendable {
     }
 
     private func transcribeSegment(_ samples: [Float]) async {
+        diagLog("[\(speaker.rawValue)] transcribeSegment: \(samples.count) samples")
         do {
-            let result = try await asrManager.transcribe(samples)
-            let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text: String
+            switch backend {
+            case .local(let asr):
+                let result = try await asr.transcribe(samples)
+                text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            case .remote(let client):
+                text = try await client.transcribe(samples)
+            }
             guard !text.isEmpty else { return }
             log.info("[\(self.speaker.rawValue)] transcribed: \(text.prefix(80))")
             onFinal(text)
         } catch {
             log.error("ASR error: \(error.localizedDescription)")
+            diagLog("[\(self.speaker.rawValue)] ASR error: \(error.localizedDescription)")
         }
     }
 
