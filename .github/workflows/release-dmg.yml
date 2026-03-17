@@ -16,12 +16,19 @@ jobs:
 
       - name: Select Xcode 26
         run: |
-          # Use latest Xcode with macOS 26 SDK
           sudo xcode-select -s /Applications/Xcode_26.app || sudo xcode-select -s /Applications/Xcode.app
           swift --version
 
+      - name: Check for signing certificate
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+        run: |
+          if [[ -n "$MACOS_CERTIFICATE" ]]; then
+            echo "HAS_CERT=true" >> "$GITHUB_ENV"
+          fi
+
       - name: Import signing certificate
-        if: ${{ secrets.MACOS_CERTIFICATE != '' }}
+        if: env.HAS_CERT == 'true'
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
