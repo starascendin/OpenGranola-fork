@@ -74,6 +74,9 @@ final class AppSettings {
         didSet { UserDefaults.standard.set(autoDetectMeetings, forKey: "autoDetectMeetings") }
     }
 
+    /// Runtime-only flag — true while a meeting session is active. Not persisted.
+    var isRecording = false
+
     /// When true, all app windows are invisible to screen sharing / recording.
     var hideFromScreenShare: Bool {
         didSet {

@@ -1,6 +1,8 @@
 import SwiftUI
 import Combine
 
+private enum IdleTab { case meetings, recordings }
+
 struct ContentView: View {
     @Bindable var settings: AppSettings
     @State private var transcriptStore = TranscriptStore()
@@ -14,6 +16,7 @@ struct ContentView: View {
     @State private var meetingStartTime: Date? = nil
     @State private var now = Date()
     @State private var pastMeetings: [URL] = []
+    @State private var idleTab: IdleTab = .meetings
     @State private var meetingDetector = MeetingDetector()
     /// True when the current session was started by auto-detection (not the user).
     @State private var isAutoStarted = false
@@ -223,6 +226,49 @@ struct ContentView: View {
 
     private var idleContent: some View {
         VStack(spacing: 0) {
+            // Tab selector
+            Picker("", selection: $idleTab) {
+                Text("Meetings").tag(IdleTab.meetings)
+                Text("Recordings").tag(IdleTab.recordings)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
+
+            Divider()
+
+            if idleTab == .meetings {
+                meetingsContent
+            } else {
+                RecordingsView()
+            }
+
+            Divider()
+
+            // New Meeting button
+            Button { startSession() } label: {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 10, height: 10)
+                    Text("New Meeting")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.primary)
+            .background(Color.primary.opacity(0.04))
+            .padding(12)
+        }
+    }
+
+    private var meetingsContent: some View {
+        Group {
             if pastMeetings.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "waveform.badge.mic")
@@ -256,26 +302,6 @@ struct ContentView: View {
                     }
                 }
             }
-
-            Divider()
-
-            // New Meeting button
-            Button { startSession() } label: {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(Color.red)
-                        .frame(width: 10, height: 10)
-                    Text("New Meeting")
-                        .font(.system(size: 14, weight: .semibold))
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 13)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.primary)
-            .background(Color.primary.opacity(0.04))
-            .padding(12)
         }
     }
 
@@ -368,6 +394,7 @@ struct ContentView: View {
         meetingStartTime = Date()
         isSuggestionsExpanded = false
         isAutoStarted = autoStarted
+        settings.isRecording = true
         Task {
             await sessionStore.startSession()
             await transcriptLogger.startSession()
@@ -386,6 +413,7 @@ struct ContentView: View {
         transcriptionEngine?.stop()
         meetingStartTime = nil
         isAutoStarted = false
+        settings.isRecording = false
         Task {
             await sessionStore.endSession()
             await transcriptLogger.endSession()
