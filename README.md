@@ -70,7 +70,7 @@ The first run downloads the local speech model (~600 MB).
 
 ## What you need
 
-- Apple Silicon Mac, macOS 26+
+- Apple Silicon Mac, macOS 15+
 - Xcode 26 / Swift 6.2
 - **For cloud mode**: [OpenRouter](https://openrouter.ai/) API key + [Voyage AI](https://www.voyageai.com/) API key
 - **For local mode**: [Ollama](https://ollama.com/) running locally with your preferred models (e.g. `qwen3:8b` for suggestions, `nomic-embed-text` for embeddings)

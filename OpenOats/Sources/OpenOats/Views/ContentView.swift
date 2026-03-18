@@ -99,6 +99,7 @@ struct ContentView: View {
                 isRunning: isRunning,
                 audioLevel: audioLevel,
                 modelDisplayName: settings.activeModelDisplay,
+                transcriptionPrompt: settings.transcriptionModel.downloadPrompt,
                 statusMessage: transcriptionEngine?.assetStatus,
                 errorMessage: transcriptionEngine?.lastError,
                 needsDownload: transcriptionEngine?.needsModelDownload ?? false,
@@ -139,7 +140,10 @@ struct ContentView: View {
             if knowledgeBase == nil {
                 let kb = KnowledgeBase(settings: settings)
                 knowledgeBase = kb
-                transcriptionEngine = TranscriptionEngine(transcriptStore: transcriptStore)
+                transcriptionEngine = TranscriptionEngine(
+                    transcriptStore: transcriptStore,
+                    settings: settings
+                )
                 suggestionEngine = SuggestionEngine(
                     transcriptStore: transcriptStore,
                     knowledgeBase: kb,
@@ -167,6 +171,9 @@ struct ContentView: View {
         }
         .onChange(of: settings.voyageApiKey) {
             indexKBIfNeeded()
+        }
+        .onChange(of: settings.transcriptionModel) {
+            transcriptionEngine?.refreshModelAvailability()
         }
         .onChange(of: settings.inputDeviceID) {
             if isRunning {
@@ -337,7 +344,8 @@ struct ContentView: View {
             await transcriptLogger?.startSession()
             await transcriptionEngine?.start(
                 locale: settings.locale,
-                inputDeviceID: settings.inputDeviceID
+                inputDeviceID: settings.inputDeviceID,
+                transcriptionModel: settings.transcriptionModel
             )
         }
     }

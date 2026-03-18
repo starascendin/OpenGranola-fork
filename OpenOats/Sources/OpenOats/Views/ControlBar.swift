@@ -4,6 +4,7 @@ struct ControlBar: View {
     let isRunning: Bool
     let audioLevel: Float
     let modelDisplayName: String
+    let transcriptionPrompt: String
     let statusMessage: String?
     let errorMessage: String?
     let needsDownload: Bool
@@ -25,7 +26,7 @@ struct ControlBar: View {
             // Download prompt
             if needsDownload && !isRunning {
                 VStack(spacing: 6) {
-                    Text("Transcription requires a one-time ~600MB model download.")
+                    Text(transcriptionPrompt)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)

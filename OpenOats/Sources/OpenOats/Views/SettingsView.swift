@@ -126,6 +126,13 @@ struct SettingsView: View {
             }
 
             Section("Transcription") {
+                Picker("Model", selection: $settings.transcriptionModel) {
+                    ForEach(TranscriptionModel.allCases) { model in
+                        Text(model.displayName).tag(model)
+                    }
+                }
+                .font(.system(size: 12))
+
                 TextField("Locale (e.g. en-US)", text: $settings.transcriptionLocale)
                     .font(.system(size: 12, design: .monospaced))
             }

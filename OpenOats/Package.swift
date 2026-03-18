@@ -4,7 +4,7 @@ import PackageDescription
 
 let package = Package(
     name: "OpenOats",
-    platforms: [.macOS(.v26)],
+    platforms: [.macOS(.v15)],
     dependencies: [
         .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.7.9"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.7.0"),

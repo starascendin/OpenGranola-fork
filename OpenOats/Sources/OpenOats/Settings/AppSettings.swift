@@ -18,6 +18,31 @@ enum LLMProvider: String, CaseIterable, Identifiable {
     }
 }
 
+enum TranscriptionModel: String, CaseIterable, Identifiable {
+    case parakeetV2
+    case parakeetV3
+    case qwen3ASR06B
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .parakeetV2: "Parakeet TDT v2"
+        case .parakeetV3: "Parakeet TDT v3"
+        case .qwen3ASR06B: "Qwen3 ASR 0.6B"
+        }
+    }
+
+    var downloadPrompt: String {
+        switch self {
+        case .parakeetV2, .parakeetV3:
+            "Transcription requires a one-time model download."
+        case .qwen3ASR06B:
+            "Qwen3 ASR requires a one-time model download."
+        }
+    }
+}
+
 enum EmbeddingProvider: String, CaseIterable, Identifiable {
     case voyageAI
     case ollama
@@ -51,6 +76,10 @@ final class AppSettings {
 
     var transcriptionLocale: String {
         didSet { UserDefaults.standard.set(transcriptionLocale, forKey: "transcriptionLocale") }
+    }
+
+    var transcriptionModel: TranscriptionModel {
+        didSet { UserDefaults.standard.set(transcriptionModel.rawValue, forKey: "transcriptionModel") }
     }
 
     /// Stored as the AudioDeviceID integer. 0 means "use system default".
@@ -125,6 +154,9 @@ final class AppSettings {
         self.notesFolderPath = defaults.string(forKey: "notesFolderPath") ?? defaultNotesPath
         self.selectedModel = defaults.string(forKey: "selectedModel") ?? "google/gemini-3-flash-preview"
         self.transcriptionLocale = defaults.string(forKey: "transcriptionLocale") ?? "en-US"
+        self.transcriptionModel = TranscriptionModel(
+            rawValue: defaults.string(forKey: "transcriptionModel") ?? ""
+        ) ?? .parakeetV2
         self.inputDeviceID = AudioDeviceID(defaults.integer(forKey: "inputDeviceID"))
         self.openRouterApiKey = KeychainHelper.load(key: "openRouterApiKey") ?? ""
         self.voyageApiKey = KeychainHelper.load(key: "voyageApiKey") ?? ""
@@ -163,7 +195,7 @@ final class AppSettings {
         guard let oldDefaults = UserDefaults(suiteName: "com.onthespot.app") else { return }
 
         let keysToMigrate = [
-            "kbFolderPath", "selectedModel", "transcriptionLocale", "inputDeviceID",
+            "kbFolderPath", "selectedModel", "transcriptionLocale", "transcriptionModel", "inputDeviceID",
             "llmProvider", "embeddingProvider", "ollamaBaseURL", "ollamaLLMModel",
             "ollamaEmbedModel", "hideFromScreenShare",
             "isTranscriptExpanded", "hasCompletedOnboarding"
@@ -199,7 +231,7 @@ final class AppSettings {
         }
 
         let keysToMigrate = [
-            "kbFolderPath", "selectedModel", "transcriptionLocale", "inputDeviceID",
+            "kbFolderPath", "selectedModel", "transcriptionLocale", "transcriptionModel", "inputDeviceID",
             "llmProvider", "embeddingProvider", "ollamaBaseURL", "ollamaLLMModel",
             "ollamaEmbedModel", "hideFromScreenShare",
             "isTranscriptExpanded", "hasCompletedOnboarding",
@@ -326,6 +358,10 @@ final class AppSettings {
 
     var locale: Locale {
         Locale(identifier: transcriptionLocale)
+    }
+
+    var transcriptionModelDisplay: String {
+        transcriptionModel.displayName
     }
 
     /// The model name to display in the UI, respecting the active LLM provider.

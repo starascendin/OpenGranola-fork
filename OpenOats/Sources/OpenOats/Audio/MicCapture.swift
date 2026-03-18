@@ -7,7 +7,8 @@ private let micLog = Logger(subsystem: "com.openoats", category: "MicCapture")
 
 /// Captures microphone audio via AVAudioEngine and streams PCM buffers.
 final class MicCapture: @unchecked Sendable {
-    private let engine = AVAudioEngine()
+    private var engine = AVAudioEngine()
+    private var hasTapInstalled = false
     private let _audioLevel = AudioLevel()
     private let _error = SyncString()
     private let _streamContinuation = OSAllocatedUnfairLock<AsyncStream<AVAudioPCMBuffer>.Continuation?>(uncheckedState: nil)
@@ -40,9 +41,11 @@ final class MicCapture: @unchecked Sendable {
 
             diagLog("[MIC-1] bufferStream called, deviceID=\(String(describing: deviceID))")
 
+            let engine = self.makeFreshEngine()
+
             // Set input device before accessing inputNode format
             if let id = deviceID {
-                let inputNode = self.engine.inputNode
+                let inputNode = engine.inputNode
                 let audioUnit = inputNode.audioUnit!
                 var devID = id
                 let status = AudioUnitSetProperty(
@@ -58,7 +61,7 @@ final class MicCapture: @unchecked Sendable {
                 diagLog("[MIC-2] no deviceID, using system default")
             }
 
-            let inputNode = self.engine.inputNode
+            let inputNode = engine.inputNode
             let format = inputNode.outputFormat(forBus: 0)
 
             diagLog("[MIC-3] inputNode format: sr=\(format.sampleRate) ch=\(format.channelCount) interleaved=\(format.isInterleaved) commonFormat=\(format.commonFormat.rawValue)")
@@ -96,6 +99,7 @@ final class MicCapture: @unchecked Sendable {
 
                 continuation.yield(buffer)
             }
+            self.hasTapInstalled = true
 
             diagLog("[MIC-5] tap installed, preparing engine...")
 
@@ -106,14 +110,15 @@ final class MicCapture: @unchecked Sendable {
             }
 
             do {
-                self.engine.prepare()
+                engine.prepare()
                 diagLog("[MIC-7] engine prepared, starting...")
-                try self.engine.start()
-                diagLog("[MIC-8] engine started successfully, isRunning=\(self.engine.isRunning)")
+                try engine.start()
+                diagLog("[MIC-8] engine started successfully, isRunning=\(engine.isRunning)")
             } catch {
                 let msg = "Mic failed: \(error.localizedDescription)"
                 print("[MIC-8-FAIL] \(msg)")
                 errorHolder.value = msg
+                self.hasTapInstalled = false
                 continuation.finish()
             }
         }
@@ -126,9 +131,24 @@ final class MicCapture: @unchecked Sendable {
     }
 
     func stop() {
-        engine.inputNode.removeTap(onBus: 0)
+        finishStream()
+        if hasTapInstalled {
+            engine.inputNode.removeTap(onBus: 0)
+            hasTapInstalled = false
+        }
         engine.stop()
         _audioLevel.value = 0
+    }
+
+    private func makeFreshEngine() -> AVAudioEngine {
+        if hasTapInstalled {
+            engine.inputNode.removeTap(onBus: 0)
+            hasTapInstalled = false
+        }
+        engine.stop()
+        let freshEngine = AVAudioEngine()
+        engine = freshEngine
+        return freshEngine
     }
 
     private static func normalizedRMS(from buffer: AVAudioPCMBuffer) -> Float {

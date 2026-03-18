@@ -155,7 +155,7 @@ jobs:
                 <pubDate>${PUB_DATE}</pubDate>
                 <sparkle:version>${VERSION}</sparkle:version>
                 <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
-                <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+                <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
                 <enclosure url="${DMG_URL}"
                            sparkle:edSignature="${ED_SIGNATURE}"
                            length="${DMG_LENGTH}"
