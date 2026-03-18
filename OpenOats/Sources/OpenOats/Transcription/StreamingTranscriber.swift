@@ -37,6 +37,8 @@ final class StreamingTranscriber: @unchecked Sendable {
 
     /// Silero VAD expects chunks of 4096 samples (256ms at 16kHz).
     private static let vadChunkSize = 4096
+    private static let minimumSpeechSamples = 8000
+    private static let prerollChunkCount = 2
     /// Flush speech for transcription every ~3 seconds (48,000 samples at 16kHz).
     private static let flushInterval = 48_000
 
@@ -45,6 +47,7 @@ final class StreamingTranscriber: @unchecked Sendable {
         var vadState = await vadManager.makeStreamState()
         var speechSamples: [Float] = []
         var vadBuffer: [Float] = []
+        var recentChunks: [[Float]] = []
         var isSpeaking = false
         var bufferCount = 0
 
@@ -67,7 +70,10 @@ final class StreamingTranscriber: @unchecked Sendable {
             while vadBuffer.count >= Self.vadChunkSize {
                 let chunk = Array(vadBuffer.prefix(Self.vadChunkSize))
                 vadBuffer.removeFirst(Self.vadChunkSize)
+                let wasSpeaking = isSpeaking
 
+                var startedSpeech = false
+                var endedSpeech = false
                 do {
                     let result = try await vadManager.processStreamingChunk(
                         chunk,
@@ -81,25 +87,39 @@ final class StreamingTranscriber: @unchecked Sendable {
                     if let event = result.event {
                         switch event.kind {
                         case .speechStart:
-                            isSpeaking = true
-                            speechSamples.removeAll(keepingCapacity: true)
-                            diagLog("[\(self.speaker.rawValue)] speech start")
+                            if !wasSpeaking {
+                                isSpeaking = true
+                                startedSpeech = true
+                                speechSamples = recentChunks.suffix(Self.prerollChunkCount).flatMap { $0 }
+                                diagLog("[\(self.speaker.rawValue)] speech start")
+                            }
 
                         case .speechEnd:
-                            isSpeaking = false
-                            diagLog("[\(self.speaker.rawValue)] speech end, samples=\(speechSamples.count)")
-                            if speechSamples.count > 8000 {
-                                let segment = speechSamples
-                                speechSamples.removeAll(keepingCapacity: true)
-                                await transcribeSegment(segment)
-                            } else {
-                                speechSamples.removeAll(keepingCapacity: true)
-                            }
+                            endedSpeech = wasSpeaking || isSpeaking
                         }
                     }
 
-                    if isSpeaking {
+                    if wasSpeaking || startedSpeech || endedSpeech {
                         speechSamples.append(contentsOf: chunk)
+                        recentChunks.removeAll(keepingCapacity: true)
+                    } else {
+                        recentChunks.append(chunk)
+                        if recentChunks.count > Self.prerollChunkCount {
+                            recentChunks.removeFirst(recentChunks.count - Self.prerollChunkCount)
+                        }
+                    }
+
+                    if endedSpeech {
+                        isSpeaking = false
+                        diagLog("[\(self.speaker.rawValue)] speech end, samples=\(speechSamples.count)")
+                        if speechSamples.count > Self.minimumSpeechSamples {
+                            let segment = speechSamples
+                            speechSamples.removeAll(keepingCapacity: true)
+                            await transcribeSegment(segment)
+                        } else {
+                            speechSamples.removeAll(keepingCapacity: true)
+                        }
+                    } else if isSpeaking {
 
                         // Flush every ~3s for near-real-time output during continuous speech
                         if speechSamples.count >= Self.flushInterval {
@@ -114,7 +134,7 @@ final class StreamingTranscriber: @unchecked Sendable {
             }
         }
 
-        if speechSamples.count > 8000 {
+        if speechSamples.count > Self.minimumSpeechSamples {
             await transcribeSegment(speechSamples)
         }
     }
