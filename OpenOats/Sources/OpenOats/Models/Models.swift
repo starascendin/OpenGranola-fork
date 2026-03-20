@@ -5,17 +5,51 @@ enum Speaker: String, Codable, Sendable {
     case them
 }
 
+enum RefinementStatus: String, Codable, Sendable {
+    case pending, completed, failed, skipped
+}
+
 struct Utterance: Identifiable, Codable, Sendable {
     let id: UUID
     let text: String
     let speaker: Speaker
     let timestamp: Date
+    let refinedText: String?
+    let refinementStatus: RefinementStatus?
 
-    init(text: String, speaker: Speaker, timestamp: Date = .now) {
+    init(text: String, speaker: Speaker, timestamp: Date = .now, refinedText: String? = nil, refinementStatus: RefinementStatus? = nil) {
         self.id = UUID()
         self.text = text
         self.speaker = speaker
         self.timestamp = timestamp
+        self.refinedText = refinedText
+        self.refinementStatus = refinementStatus
+    }
+
+    /// The best available text: refined if available, otherwise raw.
+    var displayText: String {
+        refinedText ?? text
+    }
+
+    func withRefinement(text: String?, status: RefinementStatus) -> Utterance {
+        Utterance(
+            id: self.id,
+            text: self.text,
+            speaker: self.speaker,
+            timestamp: self.timestamp,
+            refinedText: text,
+            refinementStatus: status
+        )
+    }
+
+    /// Private memberwise init that preserves an existing ID.
+    private init(id: UUID, text: String, speaker: Speaker, timestamp: Date, refinedText: String?, refinementStatus: RefinementStatus?) {
+        self.id = id
+        self.text = text
+        self.speaker = speaker
+        self.timestamp = timestamp
+        self.refinedText = refinedText
+        self.refinementStatus = refinementStatus
     }
 }
 
@@ -156,6 +190,7 @@ struct SessionRecord: Codable {
     let suggestionDecision: SuggestionDecision?
     let surfacedSuggestionText: String?
     let conversationStateSummary: String?
+    let refinedText: String?
 
     init(
         speaker: Speaker,
@@ -165,7 +200,8 @@ struct SessionRecord: Codable {
         kbHits: [String]? = nil,
         suggestionDecision: SuggestionDecision? = nil,
         surfacedSuggestionText: String? = nil,
-        conversationStateSummary: String? = nil
+        conversationStateSummary: String? = nil,
+        refinedText: String? = nil
     ) {
         self.speaker = speaker
         self.text = text
@@ -175,6 +211,7 @@ struct SessionRecord: Codable {
         self.suggestionDecision = suggestionDecision
         self.surfacedSuggestionText = surfacedSuggestionText
         self.conversationStateSummary = conversationStateSummary
+        self.refinedText = refinedText
     }
 }
 

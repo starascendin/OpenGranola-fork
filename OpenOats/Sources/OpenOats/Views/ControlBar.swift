@@ -49,6 +49,7 @@ struct ControlBar: View {
                     Text(status)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("app.controlBar.status")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)
@@ -81,10 +82,14 @@ struct ControlBar: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
+                    // Avoid hover-driven local state here. On macOS 26 / Swift 6.2,
+                    // switching this button from Start to Live while the pointer is
+                    // over it can trip a SwiftUI executor crash in onHover handling.
                     .background(isRunning ? Color.green.opacity(0.1) : Color.accentColor)
                     .clipShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .accessibilityIdentifier("app.controlBar.toggle")
 
                 // Audio level bars when running
                 if isRunning {
@@ -101,6 +106,7 @@ struct ControlBar: View {
                     .padding(.vertical, 3)
                     .background(Color.primary.opacity(0.04))
                     .clipShape(Capsule())
+                    .accessibilityIdentifier("app.controlBar.model")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)

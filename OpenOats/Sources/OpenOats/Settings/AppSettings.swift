@@ -7,6 +7,7 @@ import CoreAudio
 enum LLMProvider: String, CaseIterable, Identifiable {
     case openRouter
     case ollama
+    case mlx
 
     var id: String { rawValue }
 
@@ -14,6 +15,7 @@ enum LLMProvider: String, CaseIterable, Identifiable {
         switch self {
         case .openRouter: "OpenRouter"
         case .ollama: "Ollama"
+        case .mlx: "MLX"
         }
     }
 }
@@ -24,6 +26,8 @@ enum TranscriptionModel: String, CaseIterable, Identifiable {
     case qwen3ASR06B
     case groq
     case zai
+    case whisperBase
+    case whisperSmall
 
     var id: String { rawValue }
 
@@ -34,6 +38,8 @@ enum TranscriptionModel: String, CaseIterable, Identifiable {
         case .qwen3ASR06B: "Qwen3 ASR 0.6B"
         case .groq: "Groq (Whisper Large v3)"
         case .zai: "ZhipuAI / ZAI"
+        case .whisperBase: "Whisper Base"
+        case .whisperSmall: "Whisper Small"
         }
     }
 
@@ -45,6 +51,10 @@ enum TranscriptionModel: String, CaseIterable, Identifiable {
             "Qwen3 ASR requires a one-time model download."
         case .groq, .zai:
             ""
+        case .whisperBase:
+            "Whisper Base requires a one-time model download (~142 MB)."
+        case .whisperSmall:
+            "Whisper Small requires a one-time model download (~244 MB)."
         }
     }
 
@@ -52,7 +62,7 @@ enum TranscriptionModel: String, CaseIterable, Identifiable {
         switch self {
         case .qwen3ASR06B, .groq, .zai:
             true
-        case .parakeetV2, .parakeetV3:
+        case .parakeetV2, .parakeetV3, .whisperBase, .whisperSmall:
             false
         }
     }
@@ -63,7 +73,7 @@ enum TranscriptionModel: String, CaseIterable, Identifiable {
             "Language Hint"
         case .groq, .zai:
             "Language"
-        case .parakeetV2, .parakeetV3:
+        case .parakeetV2, .parakeetV3, .whisperBase, .whisperSmall:
             "Locale"
         }
     }
@@ -79,7 +89,34 @@ enum TranscriptionModel: String, CaseIterable, Identifiable {
         case .groq:
             "Optional. Language code for Whisper (e.g. en, zh, fr). Leave empty for auto-detection."
         case .zai:
-            "Optional. Language code (e.g. en, zh, ja). Optimised for Chinese. Leave empty for auto-detection."
+            "Optional. Language code (e.g. en, zh, ja). Optimized for Chinese. Leave empty for auto-detection."
+        case .whisperBase, .whisperSmall:
+            "Whisper auto-detects the spoken language. Locale changes do not affect this model."
+        }
+    }
+
+    /// The WhisperKit model variant, if this is a Whisper-based model.
+    var whisperVariant: WhisperKitManager.Variant? {
+        switch self {
+        case .whisperBase: .base
+        case .whisperSmall: .small
+        default: nil
+        }
+    }
+
+    func makeBackend(
+        customVocabulary: String = "",
+        groqApiKey: String = "",
+        zaiApiKey: String = ""
+    ) -> any TranscriptionBackend {
+        switch self {
+        case .parakeetV2: return ParakeetBackend(version: .v2, customVocabulary: customVocabulary)
+        case .parakeetV3: return ParakeetBackend(version: .v3, customVocabulary: customVocabulary)
+        case .qwen3ASR06B: return Qwen3Backend()
+        case .groq: return RemoteWhisperBackend(provider: .groq(apiKey: groqApiKey))
+        case .zai: return RemoteWhisperBackend(provider: .zai(apiKey: zaiApiKey))
+        case .whisperBase: return WhisperKitBackend(variant: .base)
+        case .whisperSmall: return WhisperKitBackend(variant: .small)
         }
     }
 }
@@ -100,142 +137,495 @@ enum EmbeddingProvider: String, CaseIterable, Identifiable {
     }
 }
 
+struct AppSecretStore: Sendable {
+    let loadValue: @Sendable (String) -> String?
+    let saveValue: @Sendable (String, String) -> Void
+
+    func load(key: String) -> String? {
+        loadValue(key)
+    }
+
+    func save(key: String, value: String) {
+        saveValue(key, value)
+    }
+
+    static let keychain = AppSecretStore(
+        loadValue: { KeychainHelper.load(key: $0) },
+        saveValue: { key, value in
+            KeychainHelper.save(key: key, value: value)
+        }
+    )
+
+    static let ephemeral = AppSecretStore(
+        loadValue: { _ in nil },
+        saveValue: { _, _ in }
+    )
+}
+
+struct AppSettingsStorage {
+    let defaults: UserDefaults
+    let secretStore: AppSecretStore
+    let defaultNotesDirectory: URL
+    let runMigrations: Bool
+
+    static func live(defaults: UserDefaults = .standard) -> AppSettingsStorage {
+        AppSettingsStorage(
+            defaults: defaults,
+            secretStore: .keychain,
+            defaultNotesDirectory: FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Documents/OpenOats"),
+            runMigrations: true
+        )
+    }
+}
+
 @Observable
 @MainActor
 final class AppSettings {
-    /// Runtime-only recording state (not persisted).
-    var isRecording = false
+    private let defaults: UserDefaults
+    private let secretStore: AppSecretStore
 
+    // SwiftUI can evaluate view bodies outside a MainActor executor context in
+    // Swift 6.2. Use nonisolated backing storage plus manual observation
+    // tracking so bound settings remain safe to read during those updates.
+    @ObservationIgnored nonisolated(unsafe) private var _kbFolderPath: String
     var kbFolderPath: String {
-        didSet { UserDefaults.standard.set(kbFolderPath, forKey: "kbFolderPath") }
-    }
-
-    var notesFolderPath: String {
-        didSet { UserDefaults.standard.set(notesFolderPath, forKey: "notesFolderPath") }
-    }
-
-    var selectedModel: String {
-        didSet { UserDefaults.standard.set(selectedModel, forKey: "selectedModel") }
-    }
-
-    var transcriptionLocale: String {
-        didSet { UserDefaults.standard.set(transcriptionLocale, forKey: "transcriptionLocale") }
-    }
-
-    var transcriptionModel: TranscriptionModel {
-        didSet { UserDefaults.standard.set(transcriptionModel.rawValue, forKey: "transcriptionModel") }
-    }
-
-    /// Stored as the AudioDeviceID integer. 0 means "use system default".
-    var inputDeviceID: AudioDeviceID {
-        didSet { UserDefaults.standard.set(Int(inputDeviceID), forKey: "inputDeviceID") }
-    }
-
-    var openRouterApiKey: String {
-        didSet { KeychainHelper.save(key: "openRouterApiKey", value: openRouterApiKey) }
-    }
-
-    var groqApiKey: String {
-        didSet { KeychainHelper.save(key: "groqApiKey", value: groqApiKey) }
-    }
-
-    var zaiApiKey: String {
-        didSet { KeychainHelper.save(key: "zaiApiKey", value: zaiApiKey) }
-    }
-
-    var voyageApiKey: String {
-        didSet { KeychainHelper.save(key: "voyageApiKey", value: voyageApiKey) }
-    }
-
-    var llmProvider: LLMProvider {
-        didSet { UserDefaults.standard.set(llmProvider.rawValue, forKey: "llmProvider") }
-    }
-
-    var embeddingProvider: EmbeddingProvider {
-        didSet { UserDefaults.standard.set(embeddingProvider.rawValue, forKey: "embeddingProvider") }
-    }
-
-    var ollamaBaseURL: String {
-        didSet { UserDefaults.standard.set(ollamaBaseURL, forKey: "ollamaBaseURL") }
-    }
-
-    var ollamaLLMModel: String {
-        didSet { UserDefaults.standard.set(ollamaLLMModel, forKey: "ollamaLLMModel") }
-    }
-
-    var ollamaEmbedModel: String {
-        didSet { UserDefaults.standard.set(ollamaEmbedModel, forKey: "ollamaEmbedModel") }
-    }
-
-    var openAIEmbedBaseURL: String {
-        didSet { UserDefaults.standard.set(openAIEmbedBaseURL, forKey: "openAIEmbedBaseURL") }
-    }
-
-    var openAIEmbedApiKey: String {
-        didSet { KeychainHelper.save(key: "openAIEmbedApiKey", value: openAIEmbedApiKey) }
-    }
-
-    var openAIEmbedModel: String {
-        didSet { UserDefaults.standard.set(openAIEmbedModel, forKey: "openAIEmbedModel") }
-    }
-
-    /// Whether the user has acknowledged their obligation to comply with recording consent laws.
-    var hasAcknowledgedRecordingConsent: Bool {
-        didSet { UserDefaults.standard.set(hasAcknowledgedRecordingConsent, forKey: "hasAcknowledgedRecordingConsent") }
-    }
-
-    var autoDetectMeetings: Bool {
-        didSet { UserDefaults.standard.set(autoDetectMeetings, forKey: "autoDetectMeetings") }
-    }
-
-    /// When true, all app windows are invisible to screen sharing / recording.
-    var hideFromScreenShare: Bool {
-        didSet {
-            UserDefaults.standard.set(hideFromScreenShare, forKey: "hideFromScreenShare")
-            applyScreenShareVisibility()
+        get { access(keyPath: \.kbFolderPath); return _kbFolderPath }
+        set {
+            withMutation(keyPath: \.kbFolderPath) {
+                _kbFolderPath = newValue
+                defaults.set(newValue, forKey: "kbFolderPath")
+            }
         }
     }
 
-    init() {
-        let defaults = UserDefaults.standard
+    @ObservationIgnored nonisolated(unsafe) private var _notesFolderPath: String
+    var notesFolderPath: String {
+        get { access(keyPath: \.notesFolderPath); return _notesFolderPath }
+        set {
+            withMutation(keyPath: \.notesFolderPath) {
+                _notesFolderPath = newValue
+                defaults.set(newValue, forKey: "notesFolderPath")
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _selectedModel: String
+    var selectedModel: String {
+        get { access(keyPath: \.selectedModel); return _selectedModel }
+        set {
+            withMutation(keyPath: \.selectedModel) {
+                _selectedModel = newValue
+                defaults.set(newValue, forKey: "selectedModel")
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _transcriptionLocale: String
+    var transcriptionLocale: String {
+        get { access(keyPath: \.transcriptionLocale); return _transcriptionLocale }
+        set {
+            withMutation(keyPath: \.transcriptionLocale) {
+                _transcriptionLocale = newValue
+                defaults.set(newValue, forKey: "transcriptionLocale")
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _transcriptionCustomVocabulary: String
+    var transcriptionCustomVocabulary: String {
+        get { access(keyPath: \.transcriptionCustomVocabulary); return _transcriptionCustomVocabulary }
+        set {
+            withMutation(keyPath: \.transcriptionCustomVocabulary) {
+                _transcriptionCustomVocabulary = newValue
+                defaults.set(newValue, forKey: "transcriptionCustomVocabulary")
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _transcriptionModel: TranscriptionModel
+    var transcriptionModel: TranscriptionModel {
+        get { access(keyPath: \.transcriptionModel); return _transcriptionModel }
+        set {
+            withMutation(keyPath: \.transcriptionModel) {
+                _transcriptionModel = newValue
+                defaults.set(newValue.rawValue, forKey: "transcriptionModel")
+            }
+        }
+    }
+
+    /// Stored as the AudioDeviceID integer. 0 means "use system default".
+    @ObservationIgnored nonisolated(unsafe) private var _inputDeviceID: AudioDeviceID
+    var inputDeviceID: AudioDeviceID {
+        get { access(keyPath: \.inputDeviceID); return _inputDeviceID }
+        set {
+            withMutation(keyPath: \.inputDeviceID) {
+                _inputDeviceID = newValue
+                defaults.set(Int(newValue), forKey: "inputDeviceID")
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _openRouterApiKey: String
+    var openRouterApiKey: String {
+        get { access(keyPath: \.openRouterApiKey); return _openRouterApiKey }
+        set {
+            withMutation(keyPath: \.openRouterApiKey) {
+                _openRouterApiKey = newValue
+                secretStore.save(key: "openRouterApiKey", value: newValue)
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _groqApiKey: String
+    var groqApiKey: String {
+        get { access(keyPath: \.groqApiKey); return _groqApiKey }
+        set {
+            withMutation(keyPath: \.groqApiKey) {
+                _groqApiKey = newValue
+                secretStore.save(key: "groqApiKey", value: newValue)
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _zaiApiKey: String
+    var zaiApiKey: String {
+        get { access(keyPath: \.zaiApiKey); return _zaiApiKey }
+        set {
+            withMutation(keyPath: \.zaiApiKey) {
+                _zaiApiKey = newValue
+                secretStore.save(key: "zaiApiKey", value: newValue)
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _voyageApiKey: String
+    var voyageApiKey: String {
+        get { access(keyPath: \.voyageApiKey); return _voyageApiKey }
+        set {
+            withMutation(keyPath: \.voyageApiKey) {
+                _voyageApiKey = newValue
+                secretStore.save(key: "voyageApiKey", value: newValue)
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _llmProvider: LLMProvider
+    var llmProvider: LLMProvider {
+        get { access(keyPath: \.llmProvider); return _llmProvider }
+        set {
+            withMutation(keyPath: \.llmProvider) {
+                _llmProvider = newValue
+                defaults.set(newValue.rawValue, forKey: "llmProvider")
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _embeddingProvider: EmbeddingProvider
+    var embeddingProvider: EmbeddingProvider {
+        get { access(keyPath: \.embeddingProvider); return _embeddingProvider }
+        set {
+            withMutation(keyPath: \.embeddingProvider) {
+                _embeddingProvider = newValue
+                defaults.set(newValue.rawValue, forKey: "embeddingProvider")
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _ollamaBaseURL: String
+    var ollamaBaseURL: String {
+        get { access(keyPath: \.ollamaBaseURL); return _ollamaBaseURL }
+        set {
+            withMutation(keyPath: \.ollamaBaseURL) {
+                _ollamaBaseURL = newValue
+                defaults.set(newValue, forKey: "ollamaBaseURL")
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _ollamaLLMModel: String
+    var ollamaLLMModel: String {
+        get { access(keyPath: \.ollamaLLMModel); return _ollamaLLMModel }
+        set {
+            withMutation(keyPath: \.ollamaLLMModel) {
+                _ollamaLLMModel = newValue
+                defaults.set(newValue, forKey: "ollamaLLMModel")
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _ollamaEmbedModel: String
+    var ollamaEmbedModel: String {
+        get { access(keyPath: \.ollamaEmbedModel); return _ollamaEmbedModel }
+        set {
+            withMutation(keyPath: \.ollamaEmbedModel) {
+                _ollamaEmbedModel = newValue
+                defaults.set(newValue, forKey: "ollamaEmbedModel")
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _mlxBaseURL: String
+    var mlxBaseURL: String {
+        get { access(keyPath: \.mlxBaseURL); return _mlxBaseURL }
+        set {
+            withMutation(keyPath: \.mlxBaseURL) {
+                _mlxBaseURL = newValue
+                defaults.set(newValue, forKey: "mlxBaseURL")
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _mlxModel: String
+    var mlxModel: String {
+        get { access(keyPath: \.mlxModel); return _mlxModel }
+        set {
+            withMutation(keyPath: \.mlxModel) {
+                _mlxModel = newValue
+                defaults.set(newValue, forKey: "mlxModel")
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _openAIEmbedBaseURL: String
+    var openAIEmbedBaseURL: String {
+        get { access(keyPath: \.openAIEmbedBaseURL); return _openAIEmbedBaseURL }
+        set {
+            withMutation(keyPath: \.openAIEmbedBaseURL) {
+                _openAIEmbedBaseURL = newValue
+                defaults.set(newValue, forKey: "openAIEmbedBaseURL")
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _openAIEmbedApiKey: String
+    var openAIEmbedApiKey: String {
+        get { access(keyPath: \.openAIEmbedApiKey); return _openAIEmbedApiKey }
+        set {
+            withMutation(keyPath: \.openAIEmbedApiKey) {
+                _openAIEmbedApiKey = newValue
+                secretStore.save(key: "openAIEmbedApiKey", value: newValue)
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _openAIEmbedModel: String
+    var openAIEmbedModel: String {
+        get { access(keyPath: \.openAIEmbedModel); return _openAIEmbedModel }
+        set {
+            withMutation(keyPath: \.openAIEmbedModel) {
+                _openAIEmbedModel = newValue
+                defaults.set(newValue, forKey: "openAIEmbedModel")
+            }
+        }
+    }
+
+    /// Whether the user has acknowledged their obligation to comply with recording consent laws.
+    @ObservationIgnored nonisolated(unsafe) private var _hasAcknowledgedRecordingConsent: Bool
+    var hasAcknowledgedRecordingConsent: Bool {
+        get { access(keyPath: \.hasAcknowledgedRecordingConsent); return _hasAcknowledgedRecordingConsent }
+        set {
+            withMutation(keyPath: \.hasAcknowledgedRecordingConsent) {
+                _hasAcknowledgedRecordingConsent = newValue
+                defaults.set(newValue, forKey: "hasAcknowledgedRecordingConsent")
+            }
+        }
+    }
+
+    /// When false, the live transcript panel is hidden during recording to save resources.
+    @ObservationIgnored nonisolated(unsafe) private var _showLiveTranscript: Bool
+    var showLiveTranscript: Bool {
+        get { access(keyPath: \.showLiveTranscript); return _showLiveTranscript }
+        set {
+            withMutation(keyPath: \.showLiveTranscript) {
+                _showLiveTranscript = newValue
+                defaults.set(newValue, forKey: "showLiveTranscript")
+            }
+        }
+    }
+
+    /// When true, a local .m4a audio file is saved alongside each transcript.
+    @ObservationIgnored nonisolated(unsafe) private var _saveAudioRecording: Bool
+    var saveAudioRecording: Bool {
+        get { access(keyPath: \.saveAudioRecording); return _saveAudioRecording }
+        set {
+            withMutation(keyPath: \.saveAudioRecording) {
+                _saveAudioRecording = newValue
+                defaults.set(newValue, forKey: "saveAudioRecording")
+            }
+        }
+    }
+
+    /// When true, uses the LLM to clean up filler words and fix punctuation in real-time.
+    @ObservationIgnored nonisolated(unsafe) private var _enableTranscriptRefinement: Bool
+    var enableTranscriptRefinement: Bool {
+        get { access(keyPath: \.enableTranscriptRefinement); return _enableTranscriptRefinement }
+        set {
+            withMutation(keyPath: \.enableTranscriptRefinement) {
+                _enableTranscriptRefinement = newValue
+                defaults.set(newValue, forKey: "enableTranscriptRefinement")
+            }
+        }
+    }
+
+    /// When true, all app windows are invisible to screen sharing / recording.
+    @ObservationIgnored nonisolated(unsafe) private var _hideFromScreenShare: Bool
+    var hideFromScreenShare: Bool {
+        get { access(keyPath: \.hideFromScreenShare); return _hideFromScreenShare }
+        set {
+            withMutation(keyPath: \.hideFromScreenShare) {
+                _hideFromScreenShare = newValue
+                defaults.set(newValue, forKey: "hideFromScreenShare")
+                applyScreenShareVisibility()
+            }
+        }
+    }
+
+    // MARK: - Meeting Detection
+
+    /// Whether automatic meeting detection is enabled.
+    @ObservationIgnored nonisolated(unsafe) private var _meetingAutoDetectEnabled: Bool
+    var meetingAutoDetectEnabled: Bool {
+        get { access(keyPath: \.meetingAutoDetectEnabled); return _meetingAutoDetectEnabled }
+        set {
+            withMutation(keyPath: \.meetingAutoDetectEnabled) {
+                _meetingAutoDetectEnabled = newValue
+                defaults.set(newValue, forKey: "meetingAutoDetectEnabled")
+            }
+        }
+    }
+
+    /// Whether the explanation sheet for auto-detect has been shown.
+    @ObservationIgnored nonisolated(unsafe) private var _hasShownAutoDetectExplanation: Bool
+    var hasShownAutoDetectExplanation: Bool {
+        get { access(keyPath: \.hasShownAutoDetectExplanation); return _hasShownAutoDetectExplanation }
+        set {
+            withMutation(keyPath: \.hasShownAutoDetectExplanation) {
+                _hasShownAutoDetectExplanation = newValue
+                defaults.set(newValue, forKey: "hasShownAutoDetectExplanation")
+            }
+        }
+    }
+
+    /// Whether the user has seen the suggestion to enable Launch at Login.
+    @ObservationIgnored nonisolated(unsafe) private var _hasSeenLaunchAtLoginSuggestion: Bool
+    var hasSeenLaunchAtLoginSuggestion: Bool {
+        get { access(keyPath: \.hasSeenLaunchAtLoginSuggestion); return _hasSeenLaunchAtLoginSuggestion }
+        set {
+            withMutation(keyPath: \.hasSeenLaunchAtLoginSuggestion) {
+                _hasSeenLaunchAtLoginSuggestion = newValue
+                defaults.set(newValue, forKey: "hasSeenLaunchAtLoginSuggestion")
+            }
+        }
+    }
+
+    /// Minutes of mic silence before auto-stopping a detected session.
+    @ObservationIgnored nonisolated(unsafe) private var _silenceTimeoutMinutes: Int
+    var silenceTimeoutMinutes: Int {
+        get { access(keyPath: \.silenceTimeoutMinutes); return _silenceTimeoutMinutes }
+        set {
+            withMutation(keyPath: \.silenceTimeoutMinutes) {
+                _silenceTimeoutMinutes = newValue
+                defaults.set(newValue, forKey: "silenceTimeoutMinutes")
+            }
+        }
+    }
+
+    /// User-added meeting app bundle IDs beyond the built-in list.
+    @ObservationIgnored nonisolated(unsafe) private var _customMeetingAppBundleIDs: [String]
+    var customMeetingAppBundleIDs: [String] {
+        get { access(keyPath: \.customMeetingAppBundleIDs); return _customMeetingAppBundleIDs }
+        set {
+            withMutation(keyPath: \.customMeetingAppBundleIDs) {
+                _customMeetingAppBundleIDs = newValue
+                defaults.set(newValue, forKey: "customMeetingAppBundleIDs")
+            }
+        }
+    }
+
+    /// When true, detection events are logged to the console.
+    @ObservationIgnored nonisolated(unsafe) private var _detectionLogEnabled: Bool
+    var detectionLogEnabled: Bool {
+        get { access(keyPath: \.detectionLogEnabled); return _detectionLogEnabled }
+        set {
+            withMutation(keyPath: \.detectionLogEnabled) {
+                _detectionLogEnabled = newValue
+                defaults.set(newValue, forKey: "detectionLogEnabled")
+            }
+        }
+    }
+
+    init(storage: AppSettingsStorage = .live()) {
+        self.defaults = storage.defaults
+        self.secretStore = storage.secretStore
+
+        let defaults = storage.defaults
 
         // One-time migrations from previous bundle IDs
-        Self.migrateFromOldBundleIfNeeded(defaults: defaults)
-        Self.migrateFromOpenGranolaIfNeeded(defaults: defaults)
+        if storage.runMigrations {
+            Self.migrateFromOldBundleIfNeeded(defaults: defaults)
+            Self.migrateFromOpenGranolaIfNeeded(defaults: defaults)
+            Self.migrateKeychainServiceIfNeeded(defaults: defaults)
+        }
 
-        self.kbFolderPath = defaults.string(forKey: "kbFolderPath") ?? ""
+        self._kbFolderPath = defaults.string(forKey: "kbFolderPath") ?? ""
 
-        let defaultNotesPath = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Documents/OpenOats").path
-        self.notesFolderPath = defaults.string(forKey: "notesFolderPath") ?? defaultNotesPath
-        self.selectedModel = defaults.string(forKey: "selectedModel") ?? "google/gemini-3-flash-preview"
-        self.transcriptionLocale = defaults.string(forKey: "transcriptionLocale") ?? "en-US"
-        self.transcriptionModel = TranscriptionModel(
+        let defaultNotesPath = storage.defaultNotesDirectory.path
+        self._notesFolderPath = defaults.string(forKey: "notesFolderPath") ?? defaultNotesPath
+        self._selectedModel = defaults.string(forKey: "selectedModel") ?? "google/gemini-3-flash-preview"
+        self._transcriptionLocale = defaults.string(forKey: "transcriptionLocale") ?? "en-US"
+        self._transcriptionCustomVocabulary = defaults.string(forKey: "transcriptionCustomVocabulary") ?? ""
+        self._transcriptionModel = TranscriptionModel(
             rawValue: defaults.string(forKey: "transcriptionModel") ?? ""
         ) ?? .parakeetV2
-        self.inputDeviceID = AudioDeviceID(defaults.integer(forKey: "inputDeviceID"))
-        self.openRouterApiKey = KeychainHelper.load(key: "openRouterApiKey") ?? ""
-        self.groqApiKey = KeychainHelper.load(key: "groqApiKey") ?? ""
-        self.zaiApiKey = KeychainHelper.load(key: "zaiApiKey") ?? ""
-        self.voyageApiKey = KeychainHelper.load(key: "voyageApiKey") ?? ""
-        self.llmProvider = LLMProvider(rawValue: defaults.string(forKey: "llmProvider") ?? "") ?? .openRouter
-        self.embeddingProvider = EmbeddingProvider(rawValue: defaults.string(forKey: "embeddingProvider") ?? "") ?? .voyageAI
-        self.ollamaBaseURL = defaults.string(forKey: "ollamaBaseURL") ?? "http://localhost:11434"
-        self.ollamaLLMModel = defaults.string(forKey: "ollamaLLMModel") ?? "qwen3:8b"
-        self.ollamaEmbedModel = defaults.string(forKey: "ollamaEmbedModel") ?? "nomic-embed-text"
-        self.openAIEmbedBaseURL = defaults.string(forKey: "openAIEmbedBaseURL") ?? "http://localhost:8080"
-        self.openAIEmbedApiKey = KeychainHelper.load(key: "openAIEmbedApiKey") ?? ""
-        self.openAIEmbedModel = defaults.string(forKey: "openAIEmbedModel") ?? "text-embedding-3-small"
-        self.hasAcknowledgedRecordingConsent = defaults.bool(forKey: "hasAcknowledgedRecordingConsent")
-        self.autoDetectMeetings = defaults.object(forKey: "autoDetectMeetings") == nil
-            ? true
-            : defaults.bool(forKey: "autoDetectMeetings")
+        self._inputDeviceID = AudioDeviceID(defaults.integer(forKey: "inputDeviceID"))
+        self._openRouterApiKey = secretStore.load(key: "openRouterApiKey") ?? ""
+        self._groqApiKey = secretStore.load(key: "groqApiKey") ?? ""
+        self._zaiApiKey = secretStore.load(key: "zaiApiKey") ?? ""
+        self._voyageApiKey = secretStore.load(key: "voyageApiKey") ?? ""
+        self._llmProvider = LLMProvider(rawValue: defaults.string(forKey: "llmProvider") ?? "") ?? .openRouter
+        self._embeddingProvider = EmbeddingProvider(rawValue: defaults.string(forKey: "embeddingProvider") ?? "") ?? .voyageAI
+        self._ollamaBaseURL = defaults.string(forKey: "ollamaBaseURL") ?? "http://localhost:11434"
+        self._ollamaLLMModel = defaults.string(forKey: "ollamaLLMModel") ?? "qwen3:8b"
+        self._ollamaEmbedModel = defaults.string(forKey: "ollamaEmbedModel") ?? "nomic-embed-text"
+        self._mlxBaseURL = defaults.string(forKey: "mlxBaseURL") ?? "http://localhost:8080"
+        self._mlxModel = defaults.string(forKey: "mlxModel") ?? "mlx-community/Llama-3.2-3B-Instruct-4bit"
+        self._openAIEmbedBaseURL = defaults.string(forKey: "openAIEmbedBaseURL") ?? "http://localhost:8080"
+        self._openAIEmbedApiKey = secretStore.load(key: "openAIEmbedApiKey") ?? ""
+        self._openAIEmbedModel = defaults.string(forKey: "openAIEmbedModel") ?? "text-embedding-3-small"
+        self._hasAcknowledgedRecordingConsent = defaults.bool(forKey: "hasAcknowledgedRecordingConsent")
+        self._saveAudioRecording = defaults.bool(forKey: "saveAudioRecording")
+        self._enableTranscriptRefinement = defaults.bool(forKey: "enableTranscriptRefinement")
+
+        // Default to true (shown) if key has never been set
+        if defaults.object(forKey: "showLiveTranscript") == nil {
+            self._showLiveTranscript = true
+        } else {
+            self._showLiveTranscript = defaults.bool(forKey: "showLiveTranscript")
+        }
+
+        // Meeting detection — default to enabled
+        if defaults.object(forKey: "meetingAutoDetectEnabled") == nil {
+            if defaults.object(forKey: "autoDetectMeetings") != nil {
+                self._meetingAutoDetectEnabled = defaults.bool(forKey: "autoDetectMeetings")
+            } else {
+                self._meetingAutoDetectEnabled = true
+            }
+        } else {
+            self._meetingAutoDetectEnabled = defaults.bool(forKey: "meetingAutoDetectEnabled")
+        }
+        self._hasShownAutoDetectExplanation = defaults.bool(forKey: "hasShownAutoDetectExplanation")
+        self._hasSeenLaunchAtLoginSuggestion = defaults.bool(forKey: "hasSeenLaunchAtLoginSuggestion")
+        self._silenceTimeoutMinutes = defaults.object(forKey: "silenceTimeoutMinutes") != nil
+            ? defaults.integer(forKey: "silenceTimeoutMinutes") : 15
+        self._customMeetingAppBundleIDs = defaults.stringArray(forKey: "customMeetingAppBundleIDs") ?? []
+        self._detectionLogEnabled = defaults.bool(forKey: "detectionLogEnabled")
 
         // Default to true (hidden) if key has never been set
         if defaults.object(forKey: "hideFromScreenShare") == nil {
-            self.hideFromScreenShare = true
+            self._hideFromScreenShare = true
         } else {
-            self.hideFromScreenShare = defaults.bool(forKey: "hideFromScreenShare")
+            self._hideFromScreenShare = defaults.bool(forKey: "hideFromScreenShare")
         }
 
         // Ensure notes folder exists
@@ -243,6 +633,17 @@ final class AppSettings {
             atPath: notesFolderPath,
             withIntermediateDirectories: true
         )
+
+        // Prevent Spotlight from indexing transcript contents
+        Self.dropMetadataNeverIndex(atPath: notesFolderPath)
+    }
+
+    /// Place a .metadata_never_index sentinel so Spotlight skips the directory.
+    private static func dropMetadataNeverIndex(atPath directoryPath: String) {
+        let sentinel = URL(fileURLWithPath: directoryPath).appendingPathComponent(".metadata_never_index")
+        if !FileManager.default.fileExists(atPath: sentinel.path) {
+            FileManager.default.createFile(atPath: sentinel.path, contents: nil)
+        }
     }
 
     /// Migrate settings from the old "On The Spot" (com.onthespot.app) bundle.
@@ -259,7 +660,8 @@ final class AppSettings {
             "kbFolderPath", "selectedModel", "transcriptionLocale", "transcriptionModel", "inputDeviceID",
             "llmProvider", "embeddingProvider", "ollamaBaseURL", "ollamaLLMModel",
             "ollamaEmbedModel", "hideFromScreenShare",
-            "isTranscriptExpanded", "hasCompletedOnboarding"
+            "isTranscriptExpanded", "hasCompletedOnboarding",
+            "autoDetectMeetings", "saveAudioRecording"
         ]
         for key in keysToMigrate {
             if let value = oldDefaults.object(forKey: key), defaults.object(forKey: key) == nil {
@@ -296,7 +698,7 @@ final class AppSettings {
             "llmProvider", "embeddingProvider", "ollamaBaseURL", "ollamaLLMModel",
             "ollamaEmbedModel", "hideFromScreenShare",
             "isTranscriptExpanded", "hasCompletedOnboarding",
-            "hasAcknowledgedRecordingConsent"
+            "hasAcknowledgedRecordingConsent", "autoDetectMeetings", "saveAudioRecording"
         ]
         for key in keysToMigrate {
             if let value = oldDefaults.object(forKey: key), defaults.object(forKey: key) == nil {
@@ -389,6 +791,24 @@ final class AppSettings {
         }
     }
 
+    /// Migrate keychain entries from the old "com.opengranola.app" service to the
+    /// current "com.openoats.app" service. Needed for existing users whose keychain
+    /// was written under the previous bundle ID.
+    private static func migrateKeychainServiceIfNeeded(defaults: UserDefaults) {
+        let migrationKey = "didMigrateKeychainToOpenOats"
+        guard !defaults.bool(forKey: migrationKey) else { return }
+        defer { defaults.set(true, forKey: migrationKey) }
+
+        let oldService = "com.opengranola.app"
+        let keychainKeys = ["openRouterApiKey", "groqApiKey", "zaiApiKey", "voyageApiKey", "openAIEmbedApiKey"]
+        for key in keychainKeys {
+            if KeychainHelper.load(key: key) == nil,
+               let oldValue = loadKeychain(service: oldService, key: key) {
+                KeychainHelper.save(key: key, value: oldValue)
+            }
+        }
+    }
+
     /// Read a keychain entry from a specific service (used for migration only).
     private static func loadKeychain(service: String, key: String) -> String? {
         let query: [String: Any] = [
@@ -431,6 +851,7 @@ final class AppSettings {
         switch llmProvider {
         case .openRouter: raw = selectedModel
         case .ollama: raw = ollamaLLMModel
+        case .mlx: raw = mlxModel
         }
         return raw.split(separator: "/").last.map(String.init) ?? raw
     }
@@ -440,7 +861,7 @@ final class AppSettings {
 // MARK: - Keychain Helper
 
 enum KeychainHelper {
-    private static let service = "com.opengranola.app"
+    private static let service = "com.openoats.app"
 
     static func save(key: String, value: String) {
         guard let data = value.data(using: .utf8) else { return }

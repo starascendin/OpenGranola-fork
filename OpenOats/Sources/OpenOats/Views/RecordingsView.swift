@@ -66,6 +66,8 @@ final class AudioPlayerController {
 // MARK: - Recordings View
 
 struct RecordingsView: View {
+    @AppStorage("notesFolderPath") private var notesFolderPath = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Documents/OpenOats", isDirectory: true).path
     @State private var recordings: [(url: URL, duration: TimeInterval)] = []
     @State private var controller = AudioPlayerController()
     @State private var isDragging = false
@@ -125,6 +127,9 @@ struct RecordingsView: View {
             }
         }
         .onAppear { loadRecordings() }
+        .onChange(of: notesFolderPath) { _, _ in
+            loadRecordings()
+        }
         .onChange(of: controller.currentTime) { _, newTime in
             if !isDragging { sliderValue = newTime }
         }
@@ -207,8 +212,8 @@ struct RecordingsView: View {
     }
 
     private func loadRecordings() {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Documents/OpenOats/recordings")
+        let dir = URL(fileURLWithPath: notesFolderPath, isDirectory: true)
+            .appendingPathComponent("recordings", isDirectory: true)
         let files = (try? FileManager.default.contentsOfDirectory(
             at: dir,
             includingPropertiesForKeys: [.creationDateKey],

@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreAudio
+import LaunchAtLogin
 import Sparkle
 
 struct SettingsView: View {
@@ -11,11 +12,14 @@ struct SettingsView: View {
     var updater: SPUUpdater
     @Environment(AppCoordinator.self) private var coordinator
     @State private var inputDevices: [(id: AudioDeviceID, name: String)] = []
+    @State private var automaticallyChecksForUpdates = false
+    @State private var templates: [MeetingTemplate] = []
     @State private var isAddingTemplate = false
     @State private var newTemplateName = ""
     @State private var newTemplateIcon = "doc.text"
     @State private var newTemplatePrompt = ""
     @FocusState private var focusedTemplateField: TemplateField?
+    @State private var showAutoDetectExplanation = false
 
     var body: some View {
         Form {
@@ -72,18 +76,26 @@ struct SettingsView: View {
                     }
                 }
                 .font(.system(size: 12))
+                .accessibilityIdentifier("settings.llmProviderPicker")
 
-                if settings.llmProvider == .openRouter {
+                switch settings.llmProvider {
+                case .openRouter:
                     SecureField("API Key", text: $settings.openRouterApiKey)
                         .font(.system(size: 12, design: .monospaced))
 
                     TextField("Model", text: $settings.selectedModel, prompt: Text("e.g. google/gemini-3-flash-preview"))
                         .font(.system(size: 12, design: .monospaced))
-                } else {
+                case .ollama:
                     TextField("Ollama URL", text: $settings.ollamaBaseURL, prompt: Text("http://localhost:11434"))
                         .font(.system(size: 12, design: .monospaced))
 
                     TextField("Model", text: $settings.ollamaLLMModel, prompt: Text("e.g. qwen3:8b"))
+                        .font(.system(size: 12, design: .monospaced))
+                case .mlx:
+                    TextField("MLX Server URL", text: $settings.mlxBaseURL, prompt: Text("http://localhost:8080"))
+                        .font(.system(size: 12, design: .monospaced))
+
+                    TextField("Model", text: $settings.mlxModel, prompt: Text("e.g. mlx-community/Llama-3.2-3B-Instruct-4bit"))
                         .font(.system(size: 12, design: .monospaced))
                 }
             }
@@ -104,7 +116,7 @@ struct SettingsView: View {
                     TextField("Embedding Model", text: $settings.ollamaEmbedModel, prompt: Text("e.g. nomic-embed-text"))
                         .font(.system(size: 12, design: .monospaced))
 
-                    if settings.llmProvider != .ollama {
+                    if settings.llmProvider != .ollama && settings.llmProvider != .mlx {
                         TextField("Ollama URL", text: $settings.ollamaBaseURL, prompt: Text("http://localhost:11434"))
                             .font(.system(size: 12, design: .monospaced))
                     }
@@ -128,6 +140,15 @@ struct SettingsView: View {
                     }
                 }
                 .font(.system(size: 12))
+                .accessibilityIdentifier("settings.microphonePicker")
+            }
+
+            Section("Recording") {
+                Toggle("Save audio recording", isOn: $settings.saveAudioRecording)
+                    .font(.system(size: 12))
+                Text("Save a local raw microphone recording (.caf) for each session. Audio never leaves your device.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
 
             Section("Transcription") {
@@ -137,6 +158,7 @@ struct SettingsView: View {
                     }
                 }
                 .font(.system(size: 12))
+                .accessibilityIdentifier("settings.transcriptionModelPicker")
 
                 if settings.transcriptionModel == .groq {
                     SecureField("Groq API Key", text: $settings.groqApiKey)
@@ -158,6 +180,52 @@ struct SettingsView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+
+                Toggle("Show live transcript", isOn: $settings.showLiveTranscript)
+                    .font(.system(size: 12))
+                Text("When disabled, the transcript panel is hidden during meetings. Transcription still runs in the background for suggestions and notes.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+
+                Toggle("Refine transcript", isOn: $settings.enableTranscriptRefinement)
+                    .font(.system(size: 12))
+                Text("Uses your LLM provider to clean up filler words and fix punctuation in real-time. Original text is preserved.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Custom Keywords")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+
+                    ZStack(alignment: .topLeading) {
+                        if settings.transcriptionCustomVocabulary.isEmpty {
+                            Text("One term per line. Optional aliases: OpenOats: open oats")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.quaternary)
+                                .padding(.top, 6)
+                                .padding(.leading, 4)
+                                .allowsHitTesting(false)
+                        }
+
+                        TextEditor(text: $settings.transcriptionCustomVocabulary)
+                            .font(.system(size: 11, design: .monospaced))
+                            .frame(height: 90)
+                            .frame(maxWidth: .infinity)
+                            .scrollContentBackground(.hidden)
+                    }
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(.quaternary)
+                    )
+
+                    Text(
+                        "Optional. Boost meeting-specific jargon, names, and product terms for Parakeet TDT v2/v3. Enter one term per line, or use `Preferred Term: alias one, alias two`."
+                    )
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Section("Privacy") {
@@ -168,16 +236,97 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section("Updates") {
-                Toggle("Automatically check for updates", isOn: Binding(
-                    get: { updater.automaticallyChecksForUpdates },
-                    set: { updater.automaticallyChecksForUpdates = $0 }
-                ))
+            Section("Meeting Detection") {
+                Toggle("Auto-detect meetings", isOn: $settings.meetingAutoDetectEnabled)
+                    .font(.system(size: 12))
+                    .onChange(of: settings.meetingAutoDetectEnabled) {
+                        if settings.meetingAutoDetectEnabled && !settings.hasShownAutoDetectExplanation {
+                            settings.meetingAutoDetectEnabled = false
+                            showAutoDetectExplanation = true
+                        }
+                    }
+
+                Text("When enabled, OpenOats monitors microphone activation to detect when a meeting app starts a call and automatically starts transcribing when it detects one.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+
+                LaunchAtLogin.Toggle("Launch at login")
+                    .font(.system(size: 12))
+            }
+            .sheet(isPresented: $showAutoDetectExplanation) {
+                VStack(spacing: 16) {
+                    Image(systemName: "waveform.badge.magnifyingglass")
+                        .font(.system(size: 40))
+                        .foregroundStyle(.tint)
+
+                    Text("How Meeting Detection Works")
+                        .font(.headline)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("OpenOats watches for microphone activation by meeting apps (Zoom, Teams, FaceTime, etc.)", systemImage: "mic")
+                        Label("Only activation status is checked to detect meetings. Captured audio still stays local.", systemImage: "lock.shield")
+                        Label("When a meeting is detected, OpenOats automatically starts transcribing.", systemImage: "waveform")
+                        Label("Auto-detected sessions stop automatically when the meeting ends or when the silence timeout is reached.", systemImage: "stop.circle")
+                    }
+                    .font(.system(size: 12))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    HStack {
+                        Button("Cancel") {
+                            showAutoDetectExplanation = false
+                        }
+                        .keyboardShortcut(.cancelAction)
+
+                        Button("Enable Detection") {
+                            settings.hasShownAutoDetectExplanation = true
+                            settings.meetingAutoDetectEnabled = true
+                            showAutoDetectExplanation = false
+                        }
+                        .keyboardShortcut(.defaultAction)
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding(24)
+                .frame(width: 400)
+            }
+
+            if settings.meetingAutoDetectEnabled {
+                DisclosureGroup("Advanced Detection Settings") {
+                    HStack {
+                        Text("Silence timeout")
+                            .font(.system(size: 12))
+                        Spacer()
+                        TextField("", value: $settings.silenceTimeoutMinutes, format: .number)
+                            .font(.system(size: 12, design: .monospaced))
+                            .frame(width: 50)
+                            .multilineTextAlignment(.trailing)
+                        Text("min")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("Auto-detected sessions stop after this many minutes of silence.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+
+                    Toggle("Detection log", isOn: $settings.detectionLogEnabled)
+                        .font(.system(size: 12))
+                    Text("Print detection events to the system console for debugging.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
                 .font(.system(size: 12))
             }
 
+            Section("Updates") {
+                Toggle("Automatically check for updates", isOn: $automaticallyChecksForUpdates)
+                .font(.system(size: 12))
+                .onChange(of: automaticallyChecksForUpdates) { _, newValue in
+                    syncAutomaticUpdateChecks(to: newValue)
+                }
+            }
+
             Section("Meeting Templates") {
-                ForEach(coordinator.templateStore.templates) { template in
+                ForEach(templates) { template in
                     HStack {
                         Image(systemName: template.icon)
                             .frame(width: 20)
@@ -190,14 +339,14 @@ struct SettingsView: View {
                                 .font(.system(size: 10))
                                 .foregroundStyle(.tertiary)
                             Button("Reset") {
-                                coordinator.templateStore.resetBuiltIn(id: template.id)
+                                resetTemplate(id: template.id)
                             }
                             .font(.system(size: 11))
                             .buttonStyle(.plain)
                             .foregroundStyle(.blue)
                         } else {
                             Button {
-                                coordinator.templateStore.delete(id: template.id)
+                                deleteTemplate(id: template.id)
                             } label: {
                                 Image(systemName: "trash")
                                     .font(.system(size: 11))
@@ -272,7 +421,7 @@ struct SettingsView: View {
                                     systemPrompt: trimmedTemplatePrompt,
                                     isBuiltIn: false
                                 )
-                                coordinator.templateStore.add(template)
+                                addTemplate(template)
                                 resetNewTemplateForm()
                             }
                             .buttonStyle(.borderedProminent)
@@ -291,10 +440,46 @@ struct SettingsView: View {
                 }
             }
         }
+        .accessibilityIdentifier("settings.form")
         .formStyle(.grouped)
-        .frame(width: 450, height: 700)
+        .frame(width: 450, height: 750)
         .onAppear {
-            inputDevices = MicCapture.availableInputDevices()
+            refreshViewState()
+        }
+    }
+
+    private func refreshViewState() {
+        inputDevices = MicCapture.availableInputDevices()
+        Task { @MainActor in
+            automaticallyChecksForUpdates = updater.automaticallyChecksForUpdates
+            templates = coordinator.templateStore.templates
+        }
+    }
+
+    private func syncAutomaticUpdateChecks(to newValue: Bool) {
+        Task { @MainActor in
+            updater.automaticallyChecksForUpdates = newValue
+        }
+    }
+
+    private func addTemplate(_ template: MeetingTemplate) {
+        Task { @MainActor in
+            coordinator.templateStore.add(template)
+            templates = coordinator.templateStore.templates
+        }
+    }
+
+    private func resetTemplate(id: UUID) {
+        Task { @MainActor in
+            coordinator.templateStore.resetBuiltIn(id: id)
+            templates = coordinator.templateStore.templates
+        }
+    }
+
+    private func deleteTemplate(id: UUID) {
+        Task { @MainActor in
+            coordinator.templateStore.delete(id: id)
+            templates = coordinator.templateStore.templates
         }
     }
 

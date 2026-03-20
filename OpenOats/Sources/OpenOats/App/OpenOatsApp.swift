@@ -2,19 +2,44 @@ import SwiftUI
 import AppKit
 import Sparkle
 
-@main
-struct OpenOatsApp: App {
+public struct OpenOatsRootApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @State private var settings = AppSettings()
-    @State private var coordinator = AppCoordinator()
-    private let updaterController = AppUpdaterController()
+    @Environment(\.openWindow) private var openWindow
+    @State private var settings: AppSettings
+    @State private var coordinator: AppCoordinator
+    @State private var runtime: AppRuntime
+    private let updaterController: AppUpdaterController
+    private let defaults: UserDefaults
 
-    var body: some Scene {
-        WindowGroup(id: "main") {
+    public init() {
+        let context = AppRuntime.bootstrap()
+        self._settings = State(initialValue: context.settings)
+        self._coordinator = State(initialValue: context.coordinator)
+        self._runtime = State(initialValue: context.runtime)
+        self.updaterController = context.updaterController
+        self.defaults = context.runtime.defaults
+    }
+
+    public var body: some Scene {
+        Window("OpenOats", id: "main") {
             ContentView(settings: settings)
+                .environment(runtime)
                 .environment(coordinator)
+                .defaultAppStorage(defaults)
                 .onAppear {
+                    appDelegate.coordinator = coordinator
+                    appDelegate.defaults = defaults
                     settings.applyScreenShareVisibility()
+                }
+                .onOpenURL { url in
+                    guard let command = OpenOatsDeepLink.parse(url) else { return }
+                    switch command {
+                    case .openNotes(let sessionID):
+                        coordinator.queueSessionSelection(sessionID)
+                        openNotesWindow()
+                    default:
+                        coordinator.queueExternalCommand(command)
+                    }
                 }
         }
         .windowStyle(.hiddenTitleBar)
@@ -22,31 +47,57 @@ struct OpenOatsApp: App {
         .defaultSize(width: 320, height: 560)
         .commands {
             CommandGroup(after: .appInfo) {
-                CheckForUpdatesView(updater: updaterController.updater)
+                if case .live = runtime.mode {
+                    CheckForUpdatesView(updater: updaterController.updater)
+
+                    Divider()
+                }
+
+                Button("Past Meetings") {
+                    openNotesWindow()
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+
+                Button("GitHub Repository...") {
+                    if let url = URL(string: "https://github.com/yazinsai/OpenOats") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
             }
         }
 
         Window("Notes", id: "notes") {
             NotesView(settings: settings)
+                .environment(runtime)
                 .environment(coordinator)
+                .defaultAppStorage(defaults)
         }
         .defaultSize(width: 700, height: 550)
 
         Settings {
             SettingsView(settings: settings, updater: updaterController.updater)
+                .environment(runtime)
                 .environment(coordinator)
+                .defaultAppStorage(defaults)
         }
 
         MenuBarExtra {
-            MenuBarMenuView(settings: settings)
+            MenuBarMenuView()
+                .environment(coordinator)
         } label: {
             menuBarLabel
         }
     }
+}
+
+extension OpenOatsRootApp {
+    private func openNotesWindow() {
+        openWindow(id: "notes")
+    }
 
     @ViewBuilder
     private var menuBarLabel: some View {
-        if settings.isRecording {
+        if coordinator.isRecording {
             HStack(spacing: 3) {
                 Image(systemName: "waveform.badge.mic")
                 Circle()
@@ -59,15 +110,12 @@ struct OpenOatsApp: App {
     }
 }
 
-// MARK: - Menu Bar Menu
-
 private struct MenuBarMenuView: View {
-    var settings: AppSettings
+    @Environment(AppCoordinator.self) private var coordinator
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        // Status row
-        if settings.isRecording {
+        if coordinator.isRecording {
             Label("Recording in progress", systemImage: "circle.fill")
                 .foregroundStyle(.red)
         } else {
@@ -95,17 +143,40 @@ private struct MenuBarMenuView: View {
     }
 }
 
-// MARK: - App Delegate
-
 /// Observes new window creation and applies screen-share visibility setting.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowObserver: Any?
+    var coordinator: AppCoordinator?
+    var defaults: UserDefaults = .standard
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        guard let coordinator else { return nil }
+        let menu = NSMenu()
+        if coordinator.isRecording {
+            let item = NSMenuItem(title: "Stop Recording", action: #selector(stopRecording), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        } else {
+            let item = NSMenuItem(title: "Start Recording", action: #selector(startRecording), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    @objc private func startRecording() {
+        coordinator?.queueExternalCommand(.startSession)
+    }
+
+    @objc private func stopRecording() {
+        coordinator?.queueExternalCommand(.stopSession)
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let hidden = UserDefaults.standard.object(forKey: "hideFromScreenShare") == nil
+        let hidden = defaults.object(forKey: "hideFromScreenShare") == nil
             ? true
-            : UserDefaults.standard.bool(forKey: "hideFromScreenShare")
+            : defaults.bool(forKey: "hideFromScreenShare")
         let sharingType: NSWindow.SharingType = hidden ? .none : .readOnly
 
         for window in NSApp.windows {
@@ -119,9 +190,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { _ in
             Task { @MainActor in
-                let hide = UserDefaults.standard.object(forKey: "hideFromScreenShare") == nil
+                let hide = self.defaults.object(forKey: "hideFromScreenShare") == nil
                     ? true
-                    : UserDefaults.standard.bool(forKey: "hideFromScreenShare")
+                    : self.defaults.bool(forKey: "hideFromScreenShare")
                 let type: NSWindow.SharingType = hide ? .none : .readOnly
                 for window in NSApp.windows {
                     window.sharingType = type
