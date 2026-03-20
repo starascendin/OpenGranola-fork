@@ -115,27 +115,25 @@ struct RecordingsView: View {
 
                             Spacer()
 
-                            if settings.kortexSyncEnabled {
-                                Button {
-                                    syncAll()
-                                } label: {
-                                    if isSyncingAll {
-                                        HStack(spacing: 4) {
-                                            ProgressView()
-                                                .scaleEffect(0.6)
-                                                .frame(width: 10, height: 10)
-                                            Text("Syncing...")
-                                                .font(.system(size: 10))
-                                        }
-                                    } else {
-                                        Label("Sync All", systemImage: "arrow.triangle.2.circlepath")
+                            Button {
+                                syncAll()
+                            } label: {
+                                if isSyncingAll {
+                                    HStack(spacing: 4) {
+                                        ProgressView()
+                                            .scaleEffect(0.6)
+                                            .frame(width: 10, height: 10)
+                                        Text("Syncing...")
                                             .font(.system(size: 10))
                                     }
+                                } else {
+                                    Label("Sync All", systemImage: "arrow.triangle.2.circlepath")
+                                        .font(.system(size: 10))
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.mini)
-                                .disabled(isSyncingAll)
                             }
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
+                            .disabled(isSyncingAll)
                         }
                         .padding(.horizontal, 16)
                         .padding(.top, 12)
@@ -147,7 +145,6 @@ struct RecordingsView: View {
                                 duration: item.duration,
                                 isActive: controller.currentURL == item.url,
                                 isPlaying: controller.currentURL == item.url && controller.isPlaying,
-                                syncEnabled: settings.kortexSyncEnabled,
                                 syncState: syncStates[item.url] ?? .idle,
                                 onTap: {
                                     if controller.currentURL == item.url {
@@ -316,7 +313,6 @@ private struct RecordingRow: View {
     let duration: TimeInterval
     let isActive: Bool
     let isPlaying: Bool
-    let syncEnabled: Bool
     let syncState: SyncState
     let onTap: () -> Void
     let onSync: () -> Void
@@ -346,9 +342,7 @@ private struct RecordingRow: View {
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.quaternary)
 
-            if syncEnabled {
-                syncButton
-            }
+            syncButton
 
             Button {
                 NSWorkspace.shared.open(url)
