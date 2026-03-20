@@ -3,15 +3,10 @@ import FluidAudio
 import os
 
 /// Consumes an audio buffer stream, detects speech via Silero VAD,
-/// and transcribes completed speech segments via the chosen ASR backend.
+/// and transcribes completed speech segments via the TranscriptionBackend protocol.
 final class StreamingTranscriber: @unchecked Sendable {
-    private enum Backend: @unchecked Sendable {
-        case parakeet(AsrManager)
-        case qwen3(Qwen3AsrManager, Qwen3AsrConfig.Language?)
-        case remote(WhisperAPIClient)
-    }
-
-    private let backend: Backend
+    private let backend: any TranscriptionBackend
+    private let locale: Locale
     private let vadManager: VadManager
     private let speaker: Speaker
     private let onPartial: @Sendable (String) -> Void
@@ -28,42 +23,15 @@ final class StreamingTranscriber: @unchecked Sendable {
     )!
 
     init(
-        asrManager: AsrManager,
+        backend: any TranscriptionBackend,
+        locale: Locale,
         vadManager: VadManager,
         speaker: Speaker,
         onPartial: @escaping @Sendable (String) -> Void,
         onFinal: @escaping @Sendable (String) -> Void
     ) {
-        self.backend = .parakeet(asrManager)
-        self.vadManager = vadManager
-        self.speaker = speaker
-        self.onPartial = onPartial
-        self.onFinal = onFinal
-    }
-
-    init(
-        qwen3Manager: Qwen3AsrManager,
-        qwenLanguage: Qwen3AsrConfig.Language?,
-        vadManager: VadManager,
-        speaker: Speaker,
-        onPartial: @escaping @Sendable (String) -> Void,
-        onFinal: @escaping @Sendable (String) -> Void
-    ) {
-        self.backend = .qwen3(qwen3Manager, qwenLanguage)
-        self.vadManager = vadManager
-        self.speaker = speaker
-        self.onPartial = onPartial
-        self.onFinal = onFinal
-    }
-
-    init(
-        whisperClient: WhisperAPIClient,
-        vadManager: VadManager,
-        speaker: Speaker,
-        onPartial: @escaping @Sendable (String) -> Void,
-        onFinal: @escaping @Sendable (String) -> Void
-    ) {
-        self.backend = .remote(whisperClient)
+        self.backend = backend
+        self.locale = locale
         self.vadManager = vadManager
         self.speaker = speaker
         self.onPartial = onPartial
@@ -175,28 +143,13 @@ final class StreamingTranscriber: @unchecked Sendable {
     }
 
     private func transcribeSegment(_ samples: [Float]) async {
-        diagLog("[\(speaker.rawValue)] transcribeSegment: \(samples.count) samples")
         do {
-            let text: String
-            switch backend {
-            case .parakeet(let asrManager):
-                let result = try await asrManager.transcribe(samples)
-                text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            case .qwen3(let qwen3Manager, let qwenLanguage):
-                text = try await qwen3Manager.transcribe(
-                    audioSamples: samples,
-                    language: qwenLanguage,
-                    maxNewTokens: 512
-                ).trimmingCharacters(in: .whitespacesAndNewlines)
-            case .remote(let client):
-                text = try await client.transcribe(samples)
-            }
+            let text = try await backend.transcribe(samples, locale: locale)
             guard !text.isEmpty else { return }
             log.info("[\(self.speaker.rawValue)] transcribed: \(text.prefix(80))")
             onFinal(text)
         } catch {
             log.error("ASR error: \(error.localizedDescription)")
-            diagLog("[\(self.speaker.rawValue)] ASR error: \(error.localizedDescription)")
         }
     }
 
@@ -218,14 +171,39 @@ final class StreamingTranscriber: @unchecked Sendable {
             }
         }
 
+        // Downmix multi-channel to mono before resampling
+        // (AVAudioConverter mishandles deinterleaved multi-channel input)
+        var inputBuffer = buffer
+        if sourceFormat.channelCount > 1, let src = buffer.floatChannelData {
+            let monoFormat = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: sourceFormat.sampleRate,
+                channels: 1,
+                interleaved: false
+            )!
+            if let monoBuf = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: buffer.frameCapacity),
+               let dst = monoBuf.floatChannelData?[0] {
+                monoBuf.frameLength = buffer.frameLength
+                let channels = Int(sourceFormat.channelCount)
+                let scale = 1.0 / Float(channels)
+                for i in 0..<frameLength {
+                    var sum: Float = 0
+                    for ch in 0..<channels { sum += src[ch][i] }
+                    dst[i] = sum * scale
+                }
+                inputBuffer = monoBuf
+            }
+        }
+
         // Slow path: need to resample via AVAudioConverter
-        if converter == nil || converter?.inputFormat != sourceFormat {
-            converter = AVAudioConverter(from: sourceFormat, to: targetFormat)
+        let inputFormat = inputBuffer.format
+        if converter == nil || converter?.inputFormat != inputFormat {
+            converter = AVAudioConverter(from: inputFormat, to: targetFormat)
         }
         guard let converter else { return nil }
 
-        let ratio = targetFormat.sampleRate / sourceFormat.sampleRate
-        let outputFrames = AVAudioFrameCount(Double(buffer.frameLength) * ratio)
+        let ratio = targetFormat.sampleRate / inputFormat.sampleRate
+        let outputFrames = AVAudioFrameCount(Double(inputBuffer.frameLength) * ratio)
         guard outputFrames > 0 else { return nil }
 
         guard let outputBuffer = AVAudioPCMBuffer(
@@ -234,7 +212,7 @@ final class StreamingTranscriber: @unchecked Sendable {
         ) else { return nil }
 
         var error: NSError?
-        var consumed = false
+        nonisolated(unsafe) var consumed = false
         converter.convert(to: outputBuffer, error: &error) { _, outStatus in
             if consumed {
                 outStatus.pointee = .noDataNow
@@ -242,7 +220,7 @@ final class StreamingTranscriber: @unchecked Sendable {
             }
             consumed = true
             outStatus.pointee = .haveData
-            return buffer
+            return inputBuffer
         }
 
         if let error {

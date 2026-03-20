@@ -7,6 +7,10 @@ struct NotesView: View {
     @State private var loadedNotes: EnhancedNotes?
     @State private var loadedTranscript: [SessionRecord] = []
     @State private var selectedTemplateForGeneration: MeetingTemplate?
+    @State private var renamingSessionID: String?
+    @State private var renameText: String = ""
+    @State private var sessionToDelete: String?
+    @State private var showDeleteConfirmation = false
 
     var body: some View {
         NavigationSplitView {
@@ -16,7 +20,9 @@ struct NotesView: View {
         }
         .task {
             await coordinator.loadHistory()
-            if let last = coordinator.lastEndedSession {
+            if let requested = coordinator.consumeRequestedSessionSelection() {
+                selectedSessionID = requested
+            } else if let last = coordinator.lastEndedSession {
                 selectedSessionID = last.id
             }
         }
@@ -28,6 +34,11 @@ struct NotesView: View {
                     await coordinator.loadHistory()
                     selectedSessionID = last.id
                 }
+            }
+        }
+        .onChange(of: coordinator.requestedSessionSelectionID) {
+            if let requested = coordinator.consumeRequestedSessionSelection() {
+                selectedSessionID = requested
             }
         }
         .onChange(of: coordinator.sessionHistory.count) {
@@ -46,9 +57,20 @@ struct NotesView: View {
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
-                    Text(session.title ?? "Untitled")
+                    if renamingSessionID == session.id {
+                        TextField("Title", text: $renameText, onCommit: {
+                            commitRename(sessionID: session.id)
+                        })
                         .font(.system(size: 13, weight: .medium))
-                        .lineLimit(1)
+                        .textFieldStyle(.plain)
+                        .onExitCommand {
+                            renamingSessionID = nil
+                        }
+                    } else {
+                        Text(session.title ?? "Untitled")
+                            .font(.system(size: 13, weight: .medium))
+                            .lineLimit(1)
+                    }
                     Spacer()
                     if session.hasNotes {
                         Image(systemName: "doc.text.fill")
@@ -67,11 +89,34 @@ struct NotesView: View {
                 .foregroundStyle(.tertiary)
             }
             .padding(.vertical, 2)
+            .accessibilityIdentifier("notes.session.\(session.id)")
+            .contextMenu {
+                Button("Rename...") {
+                    renameText = session.title ?? ""
+                    renamingSessionID = session.id
+                }
+                Divider()
+                Button("Delete", role: .destructive) {
+                    sessionToDelete = session.id
+                    showDeleteConfirmation = true
+                }
+            }
         }
         .navigationTitle("Sessions")
         .frame(minWidth: 200)
+        .accessibilityIdentifier("notes.sessionList")
         .onChange(of: selectedSessionID) {
             loadSelectedSession()
+        }
+        .alert("Delete Meeting?", isPresented: $showDeleteConfirmation) {
+            Button("Delete", role: .destructive) {
+                if let id = sessionToDelete {
+                    deleteSession(sessionID: id)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will permanently delete the transcript and any generated notes.")
         }
     }
 
@@ -103,6 +148,7 @@ struct NotesView: View {
                     Text("Generating notes...")
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("notes.generating")
                     Spacer()
                     Button("Cancel") {
                         coordinator.notesEngine.cancel()
@@ -154,6 +200,7 @@ struct NotesView: View {
             ScrollView {
                 markdownContent(notes.markdown)
                     .padding(20)
+                    .accessibilityIdentifier("notes.renderedMarkdown")
             }
         }
     }
@@ -211,6 +258,7 @@ struct NotesView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(loadedTranscript.isEmpty)
+                .accessibilityIdentifier("notes.generateButton")
             }
         }
         .padding(20)
@@ -342,6 +390,26 @@ struct NotesView: View {
                 // Refresh history to update hasNotes
                 await coordinator.loadHistory()
             }
+        }
+    }
+
+    private func commitRename(sessionID: String) {
+        renamingSessionID = nil
+        Task {
+            await coordinator.sessionStore.renameSession(sessionID: sessionID, newTitle: renameText)
+            await coordinator.loadHistory()
+        }
+    }
+
+    private func deleteSession(sessionID: String) {
+        Task {
+            await coordinator.sessionStore.deleteSession(sessionID: sessionID)
+            if selectedSessionID == sessionID {
+                selectedSessionID = nil
+                loadedNotes = nil
+                loadedTranscript = []
+            }
+            await coordinator.loadHistory()
         }
     }
 

@@ -11,11 +11,21 @@ actor TranscriptLogger {
         self.directory = directory ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Documents/OpenOats", isDirectory: true)
         try? FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
+        Self.dropMetadataNeverIndex(in: self.directory)
     }
 
     func updateDirectory(_ url: URL) {
         self.directory = url
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        Self.dropMetadataNeverIndex(in: url)
+    }
+
+    /// Place a .metadata_never_index sentinel so Spotlight skips this directory.
+    private static func dropMetadataNeverIndex(in directory: URL) {
+        let sentinel = directory.appendingPathComponent(".metadata_never_index")
+        if !FileManager.default.fileExists(atPath: sentinel.path) {
+            FileManager.default.createFile(atPath: sentinel.path, contents: nil)
+        }
     }
 
     func startSession() {
@@ -30,16 +40,18 @@ actor TranscriptLogger {
         headerFmt.timeStyle = .short
         sessionHeader = "OpenOats - \(headerFmt.string(from: now))\n\n"
 
-        FileManager.default.createFile(atPath: currentFile!.path, contents: sessionHeader.data(using: .utf8))
+        FileManager.default.createFile(atPath: currentFile!.path, contents: sessionHeader.data(using: .utf8),
+                                       attributes: [.posixPermissions: 0o600])
         fileHandle = try? FileHandle(forWritingTo: currentFile!)
         fileHandle?.seekToEndOfFile()
     }
 
-    func append(speaker: String, text: String, timestamp: Date) {
+    func append(speaker: String, text: String, timestamp: Date, refinedText: String? = nil) {
         guard let fileHandle else { return }
         let timeFmt = DateFormatter()
         timeFmt.dateFormat = "HH:mm:ss"
-        let line = "[\(timeFmt.string(from: timestamp))] \(speaker): \(text)\n"
+        let displayText = refinedText ?? text
+        let line = "[\(timeFmt.string(from: timestamp))] \(speaker): \(displayText)\n"
         if let data = line.data(using: .utf8) {
             fileHandle.seekToEndOfFile()
             fileHandle.write(data)
