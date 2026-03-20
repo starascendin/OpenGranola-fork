@@ -63,15 +63,29 @@ final class AudioPlayerController {
     }
 }
 
+// MARK: - Sync State
+
+private enum SyncState: Equatable {
+    case idle
+    case uploading
+    case synced
+    case failed(String)
+}
+
 // MARK: - Recordings View
 
 struct RecordingsView: View {
+    let settings: AppSettings
+
     @AppStorage("notesFolderPath") private var notesFolderPath =
         KortexOatsIdentity.defaultNotesDirectory().path
+    @Environment(KortexSyncManager.self) private var syncManager
     @State private var recordings: [(url: URL, duration: TimeInterval)] = []
     @State private var controller = AudioPlayerController()
     @State private var isDragging = false
     @State private var sliderValue: Double = 0
+    @State private var syncStates: [URL: SyncState] = [:]
+    @State private var isSyncingAll = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -93,28 +107,60 @@ struct RecordingsView: View {
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
-                        Text("RECORDINGS")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                            .tracking(1.5)
-                            .padding(.horizontal, 16)
-                            .padding(.top, 12)
-                            .padding(.bottom, 4)
+                        HStack {
+                            Text("RECORDINGS")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                                .tracking(1.5)
+
+                            Spacer()
+
+                            if settings.kortexSyncEnabled {
+                                Button {
+                                    syncAll()
+                                } label: {
+                                    if isSyncingAll {
+                                        HStack(spacing: 4) {
+                                            ProgressView()
+                                                .scaleEffect(0.6)
+                                                .frame(width: 10, height: 10)
+                                            Text("Syncing...")
+                                                .font(.system(size: 10))
+                                        }
+                                    } else {
+                                        Label("Sync All", systemImage: "arrow.triangle.2.circlepath")
+                                            .font(.system(size: 10))
+                                    }
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
+                                .disabled(isSyncingAll)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                        .padding(.bottom, 4)
 
                         ForEach(recordings, id: \.url) { item in
                             RecordingRow(
                                 url: item.url,
                                 duration: item.duration,
                                 isActive: controller.currentURL == item.url,
-                                isPlaying: controller.currentURL == item.url && controller.isPlaying
-                            ) {
-                                if controller.currentURL == item.url {
-                                    controller.togglePlayPause()
-                                } else {
-                                    controller.load(item.url)
-                                    controller.togglePlayPause()
+                                isPlaying: controller.currentURL == item.url && controller.isPlaying,
+                                syncEnabled: settings.kortexSyncEnabled,
+                                syncState: syncStates[item.url] ?? .idle,
+                                onTap: {
+                                    if controller.currentURL == item.url {
+                                        controller.togglePlayPause()
+                                    } else {
+                                        controller.load(item.url)
+                                        controller.togglePlayPause()
+                                    }
+                                },
+                                onSync: {
+                                    syncOne(item.url)
                                 }
-                            }
+                            )
                             Divider().padding(.leading, 46)
                         }
                     }
@@ -132,6 +178,40 @@ struct RecordingsView: View {
         }
         .onChange(of: controller.currentTime) { _, newTime in
             if !isDragging { sliderValue = newTime }
+        }
+    }
+
+    // MARK: - Sync Actions
+
+    private func syncOne(_ url: URL) {
+        guard syncStates[url] != .uploading else { return }
+        syncStates[url] = .uploading
+        Task {
+            do {
+                try await syncManager.uploadAudioRecording(url: url, settings: settings)
+                syncStates[url] = .synced
+            } catch {
+                syncStates[url] = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private func syncAll() {
+        guard !isSyncingAll else { return }
+        isSyncingAll = true
+        Task {
+            for item in recordings {
+                guard syncStates[item.url] != .synced,
+                      syncStates[item.url] != .uploading else { continue }
+                syncStates[item.url] = .uploading
+                do {
+                    try await syncManager.uploadAudioRecording(url: item.url, settings: settings)
+                    syncStates[item.url] = .synced
+                } catch {
+                    syncStates[item.url] = .failed(error.localizedDescription)
+                }
+            }
+            isSyncingAll = false
         }
     }
 
@@ -236,7 +316,10 @@ private struct RecordingRow: View {
     let duration: TimeInterval
     let isActive: Bool
     let isPlaying: Bool
+    let syncEnabled: Bool
+    let syncState: SyncState
     let onTap: () -> Void
+    let onSync: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -263,6 +346,10 @@ private struct RecordingRow: View {
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.quaternary)
 
+            if syncEnabled {
+                syncButton
+            }
+
             Button {
                 NSWorkspace.shared.open(url)
             } label: {
@@ -278,6 +365,37 @@ private struct RecordingRow: View {
         .contentShape(Rectangle())
         .background(isActive ? Color.primary.opacity(0.04) : Color.clear)
         .onTapGesture { onTap() }
+    }
+
+    @ViewBuilder
+    private var syncButton: some View {
+        switch syncState {
+        case .idle:
+            Button(action: onSync) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Sync to Kortex")
+        case .uploading:
+            ProgressView()
+                .scaleEffect(0.6)
+                .frame(width: 14, height: 14)
+        case .synced:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.green)
+                .help("Synced to Kortex")
+        case .failed(let msg):
+            Button(action: onSync) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+            }
+            .buttonStyle(.plain)
+            .help("Sync failed: \(msg). Tap to retry.")
+        }
     }
 
     /// "session_2026-03-17_14-01-54" → "2:01 PM"

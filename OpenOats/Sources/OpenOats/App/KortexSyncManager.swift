@@ -205,6 +205,51 @@ final class KortexSyncManager {
         isUploading = false
     }
 
+    enum SyncError: LocalizedError {
+        case notAuthenticated
+        case noWorkspaceSelected
+        var errorDescription: String? {
+            switch self {
+            case .notAuthenticated: return "Sign in to Kortex in Settings to sync."
+            case .noWorkspaceSelected: return "Select a Kortex workspace in Settings."
+            }
+        }
+    }
+
+    func uploadAudioRecording(url: URL, settings: AppSettings) async throws {
+        guard case .authenticated = authState else { throw SyncError.notAuthenticated }
+        let workspaceId = settings.kortexWorkspaceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !workspaceId.isEmpty else { throw SyncError.noWorkspaceSelected }
+
+        let artifact = try await uploadFile(fileURL: url, contentType: "audio/x-caf")
+        let sessionId = url.deletingPathExtension().lastPathComponent
+        let startedAt = Self.parseSessionDate(from: sessionId) ?? Date()
+
+        let args: [String: ConvexEncodable] = [
+            "workspaceId": workspaceId,
+            "externalSessionId": sessionId,
+            "sourceApp": KortexOatsIdentity.sourceAppName,
+            "startedAt": Int(startedAt.timeIntervalSince1970 * 1000),
+            "utteranceCount": 0,
+            "audioStorageId": artifact.storageId,
+            "audioFileName": artifact.fileName,
+            "audioContentType": artifact.contentType,
+            "audioSize": artifact.size,
+        ]
+        let _: String = try await client.mutation("meetingSessions:create", with: args)
+    }
+
+    private static func parseSessionDate(from sessionId: String) -> Date? {
+        // Format: session_YYYY-MM-DD_HH-mm-ss
+        let parts = sessionId.components(separatedBy: "_")
+        guard parts.count >= 3 else { return nil }
+        let dateStr = "\(parts[1]) \(parts[2].replacingOccurrences(of: "-", with: ":"))"
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        return fmt.date(from: dateStr)
+    }
+
     private func observeAuthState() {
         authTask?.cancel()
         authTask = Task { [weak self] in

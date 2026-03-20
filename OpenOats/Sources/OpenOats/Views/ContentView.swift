@@ -183,7 +183,7 @@ struct ContentView: View {
 
                 Divider()
             } else {
-                RecordingsView()
+                RecordingsView(settings: settings)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 Divider()
