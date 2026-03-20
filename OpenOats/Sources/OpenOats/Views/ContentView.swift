@@ -209,7 +209,7 @@ struct ContentView: View {
 
     private var sizedRootContent: some View {
         rootContent
-            .frame(minWidth: 360, maxWidth: 600, minHeight: 400, idealHeight: 560)
+            .frame(minWidth: 420, maxWidth: 600, minHeight: 520, idealHeight: 600)
             .background(.ultraThinMaterial)
     }
 

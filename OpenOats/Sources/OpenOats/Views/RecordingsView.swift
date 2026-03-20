@@ -169,12 +169,39 @@ struct RecordingsView: View {
                 }
             }
         }
-        .onAppear { loadRecordings() }
+        .onAppear {
+            loadRecordings()
+            syncManager.subscribeSyncedSessions(settings: settings)
+        }
         .onChange(of: notesFolderPath) { _, _ in
             loadRecordings()
         }
+        .onChange(of: settings.kortexWorkspaceId) { _, _ in
+            syncManager.subscribeSyncedSessions(settings: settings)
+        }
+        .onChange(of: syncManager.syncedSessionIds) { _, _ in
+            updateSyncStatesFromConvex()
+        }
         .onChange(of: controller.currentTime) { _, newTime in
             if !isDragging { sliderValue = newTime }
+        }
+    }
+
+    // MARK: - Convex state reconciliation
+
+    /// Updates local syncStates to reflect what Convex actually has.
+    /// Called whenever the live Convex subscription delivers fresh data.
+    /// Local files are never deleted — only their sync indicator changes.
+    private func updateSyncStatesFromConvex() {
+        for item in recordings {
+            let sessionId = item.url.deletingPathExtension().lastPathComponent
+            guard syncStates[item.url] != .uploading else { continue }
+            if syncManager.syncedSessionIds.contains(sessionId) {
+                syncStates[item.url] = .synced
+            } else if case .synced = syncStates[item.url] {
+                // Was marked synced locally, but no longer exists on Convex → reset
+                syncStates[item.url] = .idle
+            }
         }
     }
 
@@ -303,6 +330,8 @@ struct RecordingsView: View {
                 let dur = (try? AVAudioPlayer(contentsOf: url))?.duration ?? 0
                 return (url: url, duration: dur)
             }
+        // Apply whatever Convex state we already have
+        updateSyncStatesFromConvex()
     }
 }
 
@@ -318,44 +347,83 @@ private struct RecordingRow: View {
     let onSync: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
-            Button(action: onTap) {
-                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(isActive ? Color.accentTeal : .secondary)
-            }
-            .buttonStyle(.plain)
-            .frame(width: 22)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                Button(action: onTap) {
+                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundStyle(isActive ? Color.accentTeal : .secondary)
+                }
+                .buttonStyle(.plain)
+                .frame(width: 22)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(displayTime)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.primary)
-                Text(displayDate)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-            }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(displayTime)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.primary)
+                    Text(displayDate)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                    HStack(spacing: 4) {
+                        Text("CAF")
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.primary.opacity(0.07))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.tertiary)
+                        Text("M4A")
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.mint)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.mint.opacity(0.15))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                        Text("on sync")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.quaternary)
+                    }
+                }
 
-            Spacer()
+                Spacer()
 
-            Text(durationString)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.quaternary)
-
-            syncButton
-
-            Button {
-                NSWorkspace.shared.open(url)
-            } label: {
-                Image(systemName: "arrow.up.right.square")
-                    .font(.system(size: 12))
+                Text(durationString)
+                    .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.quaternary)
+
+                syncButton
+
+                Button {
+                    NSWorkspace.shared.open(url)
+                } label: {
+                    Image(systemName: "arrow.up.right.square")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.quaternary)
+                }
+                .buttonStyle(.plain)
+                .help("Show in Finder")
             }
-            .buttonStyle(.plain)
-            .help("Show in Finder")
+            .padding(.horizontal, 16)
+            .padding(.vertical, 9)
+
+            if case .failed(let msg) = syncState {
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                    Text(msg)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                        .lineLimit(2)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 6)
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 9)
         .contentShape(Rectangle())
         .background(isActive ? Color.primary.opacity(0.04) : Color.clear)
         .onTapGesture { onTap() }
