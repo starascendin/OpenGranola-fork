@@ -76,6 +76,14 @@ else
   echo "Warning: Sparkle.framework not found in build artifacts"
 fi
 
+# Copy SPM resource bundles (e.g. meeting-apps.json)
+for BUNDLE in "$SWIFT_DIR/.build/release"/*.bundle; do
+  if [[ -d "$BUNDLE" ]]; then
+    cp -R "$BUNDLE" "$APP_DIR/Contents/Resources/"
+    echo "Copied resource bundle: $(basename "$BUNDLE")"
+  fi
+done
+
 # Add PkgInfo
 echo -n "APPL????" > "$APP_DIR/Contents/PkgInfo"
 
