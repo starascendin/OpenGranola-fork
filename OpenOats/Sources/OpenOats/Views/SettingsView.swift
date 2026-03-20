@@ -138,6 +138,14 @@ struct SettingsView: View {
                 }
                 .font(.system(size: 12))
 
+                if settings.transcriptionModel == .groq {
+                    SecureField("Groq API Key", text: $settings.groqApiKey)
+                        .font(.system(size: 12, design: .monospaced))
+                } else if settings.transcriptionModel == .zai {
+                    SecureField("ZhipuAI API Key", text: $settings.zaiApiKey)
+                        .font(.system(size: 12, design: .monospaced))
+                }
+
                 if settings.transcriptionModel.supportsExplicitLanguageHint {
                     TextField(
                         "\(settings.transcriptionModel.localeFieldTitle) (e.g. en-US)",

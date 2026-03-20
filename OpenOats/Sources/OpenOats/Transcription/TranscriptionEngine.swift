@@ -135,6 +135,10 @@ final class TranscriptionEngine {
                 self.qwen3Manager = qwen3
                 self.micAsrManager = nil
                 self.systemAsrManager = nil
+            case .groq, .zai:
+                self.micAsrManager = nil
+                self.systemAsrManager = nil
+                self.qwen3Manager = nil
             }
 
             assetStatus = "Loading VAD model..."
@@ -461,6 +465,26 @@ final class TranscriptionEngine {
                 onPartial: onPartial,
                 onFinal: onFinal
             )
+        case .groq:
+            let language = normalizedLanguageCode(for: locale) ?? ""
+            let client = WhisperAPIClient.groq(apiKey: settings.groqApiKey, language: language)
+            return StreamingTranscriber(
+                whisperClient: client,
+                vadManager: vadManager,
+                speaker: speaker,
+                onPartial: onPartial,
+                onFinal: onFinal
+            )
+        case .zai:
+            let language = normalizedLanguageCode(for: locale) ?? ""
+            let client = WhisperAPIClient.zai(apiKey: settings.zaiApiKey, language: language)
+            return StreamingTranscriber(
+                whisperClient: client,
+                vadManager: vadManager,
+                speaker: speaker,
+                onPartial: onPartial,
+                onFinal: onFinal
+            )
         }
     }
 
@@ -495,6 +519,8 @@ final class TranscriptionEngine {
             )
         case .qwen3ASR06B:
             return !Qwen3AsrModels.modelsExist(at: Qwen3AsrModels.defaultCacheDirectory())
+        case .groq, .zai:
+            return false
         }
     }
 

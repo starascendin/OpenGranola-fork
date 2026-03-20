@@ -22,6 +22,8 @@ enum TranscriptionModel: String, CaseIterable, Identifiable {
     case parakeetV2
     case parakeetV3
     case qwen3ASR06B
+    case groq
+    case zai
 
     var id: String { rawValue }
 
@@ -30,6 +32,8 @@ enum TranscriptionModel: String, CaseIterable, Identifiable {
         case .parakeetV2: "Parakeet TDT v2"
         case .parakeetV3: "Parakeet TDT v3"
         case .qwen3ASR06B: "Qwen3 ASR 0.6B"
+        case .groq: "Groq (Whisper Large v3)"
+        case .zai: "ZhipuAI / ZAI"
         }
     }
 
@@ -39,12 +43,14 @@ enum TranscriptionModel: String, CaseIterable, Identifiable {
             "Transcription requires a one-time model download."
         case .qwen3ASR06B:
             "Qwen3 ASR requires a one-time model download."
+        case .groq, .zai:
+            ""
         }
     }
 
     var supportsExplicitLanguageHint: Bool {
         switch self {
-        case .qwen3ASR06B:
+        case .qwen3ASR06B, .groq, .zai:
             true
         case .parakeetV2, .parakeetV3:
             false
@@ -55,6 +61,8 @@ enum TranscriptionModel: String, CaseIterable, Identifiable {
         switch self {
         case .qwen3ASR06B:
             "Language Hint"
+        case .groq, .zai:
+            "Language"
         case .parakeetV2, .parakeetV3:
             "Locale"
         }
@@ -68,6 +76,10 @@ enum TranscriptionModel: String, CaseIterable, Identifiable {
             "Parakeet TDT v3 auto-detects among its supported languages. Locale changes do not affect this model."
         case .qwen3ASR06B:
             "Optional. Used as a language hint for Qwen3 ASR. Enter a locale such as en-US, fr-FR, or ja-JP. Applies when a new session starts."
+        case .groq:
+            "Optional. Language code for Whisper (e.g. en, zh, fr). Leave empty for auto-detection."
+        case .zai:
+            "Optional. Language code (e.g. en, zh, ja). Optimised for Chinese. Leave empty for auto-detection."
         }
     }
 }
@@ -91,6 +103,9 @@ enum EmbeddingProvider: String, CaseIterable, Identifiable {
 @Observable
 @MainActor
 final class AppSettings {
+    /// Runtime-only recording state (not persisted).
+    var isRecording = false
+
     var kbFolderPath: String {
         didSet { UserDefaults.standard.set(kbFolderPath, forKey: "kbFolderPath") }
     }
@@ -118,6 +133,14 @@ final class AppSettings {
 
     var openRouterApiKey: String {
         didSet { KeychainHelper.save(key: "openRouterApiKey", value: openRouterApiKey) }
+    }
+
+    var groqApiKey: String {
+        didSet { KeychainHelper.save(key: "groqApiKey", value: groqApiKey) }
+    }
+
+    var zaiApiKey: String {
+        didSet { KeychainHelper.save(key: "zaiApiKey", value: zaiApiKey) }
     }
 
     var voyageApiKey: String {
@@ -161,6 +184,10 @@ final class AppSettings {
         didSet { UserDefaults.standard.set(hasAcknowledgedRecordingConsent, forKey: "hasAcknowledgedRecordingConsent") }
     }
 
+    var autoDetectMeetings: Bool {
+        didSet { UserDefaults.standard.set(autoDetectMeetings, forKey: "autoDetectMeetings") }
+    }
+
     /// When true, all app windows are invisible to screen sharing / recording.
     var hideFromScreenShare: Bool {
         didSet {
@@ -188,6 +215,8 @@ final class AppSettings {
         ) ?? .parakeetV2
         self.inputDeviceID = AudioDeviceID(defaults.integer(forKey: "inputDeviceID"))
         self.openRouterApiKey = KeychainHelper.load(key: "openRouterApiKey") ?? ""
+        self.groqApiKey = KeychainHelper.load(key: "groqApiKey") ?? ""
+        self.zaiApiKey = KeychainHelper.load(key: "zaiApiKey") ?? ""
         self.voyageApiKey = KeychainHelper.load(key: "voyageApiKey") ?? ""
         self.llmProvider = LLMProvider(rawValue: defaults.string(forKey: "llmProvider") ?? "") ?? .openRouter
         self.embeddingProvider = EmbeddingProvider(rawValue: defaults.string(forKey: "embeddingProvider") ?? "") ?? .voyageAI
@@ -198,6 +227,9 @@ final class AppSettings {
         self.openAIEmbedApiKey = KeychainHelper.load(key: "openAIEmbedApiKey") ?? ""
         self.openAIEmbedModel = defaults.string(forKey: "openAIEmbedModel") ?? "text-embedding-3-small"
         self.hasAcknowledgedRecordingConsent = defaults.bool(forKey: "hasAcknowledgedRecordingConsent")
+        self.autoDetectMeetings = defaults.object(forKey: "autoDetectMeetings") == nil
+            ? true
+            : defaults.bool(forKey: "autoDetectMeetings")
 
         // Default to true (hidden) if key has never been set
         if defaults.object(forKey: "hideFromScreenShare") == nil {
@@ -237,7 +269,7 @@ final class AppSettings {
 
         // Migrate Keychain entries from old service
         let oldService = "com.onthespot.app"
-        let keychainKeys = ["openRouterApiKey", "voyageApiKey"]
+        let keychainKeys = ["openRouterApiKey", "groqApiKey", "zaiApiKey", "voyageApiKey"]
         for key in keychainKeys {
             if KeychainHelper.load(key: key) == nil,
                let oldValue = Self.loadKeychain(service: oldService, key: key) {
@@ -274,7 +306,7 @@ final class AppSettings {
 
         // --- Migrate Keychain ---
         let oldService = "com.opengranola.app"
-        let keychainKeys = ["openRouterApiKey", "voyageApiKey"]
+        let keychainKeys = ["openRouterApiKey", "groqApiKey", "zaiApiKey", "voyageApiKey"]
         for key in keychainKeys {
             if KeychainHelper.load(key: key) == nil,
                let oldValue = Self.loadKeychain(service: oldService, key: key) {

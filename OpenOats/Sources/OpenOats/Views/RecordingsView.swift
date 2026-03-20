@@ -208,7 +208,7 @@ struct RecordingsView: View {
 
     private func loadRecordings() {
         let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Documents/OpenGranola/recordings")
+            .appendingPathComponent("Documents/OpenOats/recordings")
         let files = (try? FileManager.default.contentsOfDirectory(
             at: dir,
             includingPropertiesForKeys: [.creationDateKey],

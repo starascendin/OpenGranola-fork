@@ -1,12 +1,12 @@
 import AVFoundation
 import os
 
-/// Writes mic audio buffers to a .caf file in ~/Documents/OpenGranola/recordings/.
+/// Writes mic audio buffers to a .caf file in ~/Documents/OpenOats/recordings/.
 /// The file is created lazily on the first write, using the buffer's native format.
 actor AudioRecorder {
     private var file: AVAudioFile?
     private(set) var fileURL: URL?
-    private let log = Logger(subsystem: "com.opengranola", category: "AudioRecorder")
+    private let log = Logger(subsystem: "com.openoats", category: "AudioRecorder")
 
     func write(_ buffer: AVAudioPCMBuffer) {
         // Lazily open the file on first buffer using its native format
@@ -41,7 +41,7 @@ actor AudioRecorder {
 
     private func makeURL() -> URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let dir = docs.appendingPathComponent("OpenGranola/recordings", isDirectory: true)
+        let dir = docs.appendingPathComponent("OpenOats/recordings", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"

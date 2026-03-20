@@ -8,6 +8,7 @@ final class StreamingTranscriber: @unchecked Sendable {
     private enum Backend: @unchecked Sendable {
         case parakeet(AsrManager)
         case qwen3(Qwen3AsrManager, Qwen3AsrConfig.Language?)
+        case remote(WhisperAPIClient)
     }
 
     private let backend: Backend
@@ -49,6 +50,20 @@ final class StreamingTranscriber: @unchecked Sendable {
         onFinal: @escaping @Sendable (String) -> Void
     ) {
         self.backend = .qwen3(qwen3Manager, qwenLanguage)
+        self.vadManager = vadManager
+        self.speaker = speaker
+        self.onPartial = onPartial
+        self.onFinal = onFinal
+    }
+
+    init(
+        whisperClient: WhisperAPIClient,
+        vadManager: VadManager,
+        speaker: Speaker,
+        onPartial: @escaping @Sendable (String) -> Void,
+        onFinal: @escaping @Sendable (String) -> Void
+    ) {
+        self.backend = .remote(whisperClient)
         self.vadManager = vadManager
         self.speaker = speaker
         self.onPartial = onPartial
@@ -173,6 +188,8 @@ final class StreamingTranscriber: @unchecked Sendable {
                     language: qwenLanguage,
                     maxNewTokens: 512
                 ).trimmingCharacters(in: .whitespacesAndNewlines)
+            case .remote(let client):
+                text = try await client.transcribe(samples)
             }
             guard !text.isEmpty else { return }
             log.info("[\(self.speaker.rawValue)] transcribed: \(text.prefix(80))")

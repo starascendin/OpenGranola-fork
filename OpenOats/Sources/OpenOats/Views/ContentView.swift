@@ -1,6 +1,8 @@
 import SwiftUI
 import Combine
 
+private enum IdleTab { case sessions, recordings }
+
 struct ContentView: View {
     @Bindable var settings: AppSettings
     @Environment(AppCoordinator.self) private var coordinator
@@ -16,6 +18,9 @@ struct ContentView: View {
     @State private var showOnboarding = false
     @State private var showConsentSheet = false
     @State private var audioLevel: Float = 0
+    @State private var meetingDetector = MeetingDetector()
+    @State private var isAutoStarted = false
+    @State private var idleTab: IdleTab = .sessions
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,88 +29,9 @@ struct ContentView: View {
 
             Divider()
 
-            // Post-session banner
-            if let lastSession = coordinator.lastEndedSession, lastSession.utteranceCount > 0 {
-                HStack {
-                    Text("Session ended \u{00B7} \(lastSession.utteranceCount) utterances")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button {
-                        openWindow(id: "notes")
-                    } label: {
-                        Label("Generate Notes", systemImage: "sparkles")
-                            .font(.system(size: 12))
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(.ultraThinMaterial)
-
-                Divider()
-            }
-
-            // Main content: Suggestions
-            VStack(alignment: .leading, spacing: 0) {
-                sectionHeader("SUGGESTIONS")
-                SuggestionsView(
-                    suggestions: suggestionEngine?.suggestions ?? [],
-                    isGenerating: suggestionEngine?.isGenerating ?? false
-                )
-            }
-
-            Divider()
-
-            // Collapsible transcript
-            DisclosureGroup(isExpanded: $isTranscriptExpanded) {
-                TranscriptView(
-                    utterances: transcriptStore.utterances,
-                    volatileYouText: transcriptStore.volatileYouText,
-                    volatileThemText: transcriptStore.volatileThemText
-                )
-                .frame(height: 150)
-            } label: {
-                HStack(spacing: 6) {
-                    Text("Transcript")
-                        .font(.system(size: 12, weight: .medium))
-                    if !transcriptStore.utterances.isEmpty {
-                        Text("(\(transcriptStore.utterances.count))")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.tertiary)
-                    }
-                    Spacer()
-                    if isTranscriptExpanded && !transcriptStore.utterances.isEmpty {
-                        Button {
-                            copyTranscript()
-                        } label: {
-                            Image(systemName: "doc.on.doc")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Copy transcript")
-                    }
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-
-            Divider()
-
-            // Bottom bar: live indicator + model
-            ControlBar(
-                isRunning: isRunning,
-                audioLevel: audioLevel,
-                modelDisplayName: settings.activeModelDisplay,
-                transcriptionPrompt: settings.transcriptionModel.downloadPrompt,
-                statusMessage: transcriptionEngine?.assetStatus,
-                errorMessage: transcriptionEngine?.lastError,
-                needsDownload: transcriptionEngine?.needsModelDownload ?? false,
-                onToggle: isRunning ? stopSession : startSession,
-                onConfirmDownload: confirmDownloadAndStart
-            )
+            postSessionBanner
+            tabContent
+            controlBar
         }
         .frame(minWidth: 360, maxWidth: 600, minHeight: 400)
         .background(.ultraThinMaterial)
@@ -130,12 +56,15 @@ struct ContentView: View {
         .onChange(of: showConsentSheet) {
             // Auto-start session after consent is acknowledged
             if !showConsentSheet && settings.hasAcknowledgedRecordingConsent && !isRunning {
-                startSession()
+                startSession(autoStarted: false)
             }
         }
         .task {
             if !hasCompletedOnboarding {
                 showOnboarding = true
+            }
+            if settings.autoDetectMeetings {
+                meetingDetector.start()
             }
             if knowledgeBase == nil {
                 let kb = KnowledgeBase(settings: settings)
@@ -172,6 +101,8 @@ struct ContentView: View {
         .onChange(of: settings.voyageApiKey) {
             indexKBIfNeeded()
         }
+        .onChange(of: settings.autoDetectMeetings, perform: onAutoDetectChanged)
+        .onChange(of: meetingDetector.isInMeeting, perform: onMeetingStateChanged)
         .onChange(of: settings.transcriptionModel) {
             transcriptionEngine?.refreshModelAvailability()
         }
@@ -196,6 +127,132 @@ struct ContentView: View {
                 audioLevel = engine.audioLevel
             } else if audioLevel != 0 {
                 audioLevel = 0
+            }
+        }
+    }
+
+    // MARK: - Sub-views
+
+    @ViewBuilder
+    private var postSessionBanner: some View {
+        if let lastSession = coordinator.lastEndedSession, lastSession.utteranceCount > 0 {
+            HStack {
+                Text("Session ended · \(lastSession.utteranceCount) utterances")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button { openWindow(id: "notes") } label: {
+                    Label("Generate Notes", systemImage: "sparkles")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(.ultraThinMaterial)
+            Divider()
+        }
+    }
+
+    private var controlBar: some View {
+        ControlBar(
+            isRunning: isRunning,
+            audioLevel: audioLevel,
+            modelDisplayName: settings.activeModelDisplay,
+            transcriptionPrompt: settings.transcriptionModel.downloadPrompt,
+            statusMessage: transcriptionEngine?.assetStatus,
+            errorMessage: transcriptionEngine?.lastError,
+            needsDownload: transcriptionEngine?.needsModelDownload ?? false,
+            onToggle: toggleSession,
+            onConfirmDownload: confirmDownloadAndStart
+        )
+    }
+
+    private func toggleSession() {
+        if isRunning { stopSession() } else { startSession() }
+    }
+
+    private func onAutoDetectChanged(_ enabled: Bool) {
+        if enabled { meetingDetector.start() } else { meetingDetector.stopDetector() }
+    }
+
+    private func onMeetingStateChanged(_ inMeeting: Bool) {
+        guard settings.autoDetectMeetings else { return }
+        if inMeeting && !isRunning {
+            startSession(autoStarted: true)
+        } else if !inMeeting && isAutoStarted {
+            stopSession()
+        }
+    }
+
+    // MARK: - Tab Content
+
+    @ViewBuilder
+    private var tabContent: some View {
+        if !isRunning {
+            Picker("", selection: $idleTab) {
+                Text("Sessions").tag(IdleTab.sessions)
+                Text("Recordings").tag(IdleTab.recordings)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            Divider()
+        }
+
+        if isRunning || idleTab == .sessions {
+            sessionsContent
+        } else {
+            RecordingsView()
+                .frame(maxHeight: .infinity)
+            Divider()
+        }
+    }
+
+    @ViewBuilder
+    private var sessionsContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionHeader("SUGGESTIONS")
+            SuggestionsView(
+                suggestions: suggestionEngine?.suggestions ?? [],
+                isGenerating: suggestionEngine?.isGenerating ?? false
+            )
+        }
+        Divider()
+        DisclosureGroup(isExpanded: $isTranscriptExpanded) {
+            TranscriptView(
+                utterances: transcriptStore.utterances,
+                volatileYouText: transcriptStore.volatileYouText,
+                volatileThemText: transcriptStore.volatileThemText
+            )
+            .frame(height: 150)
+        } label: {
+            transcriptLabel
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        Divider()
+    }
+
+    private var transcriptLabel: some View {
+        HStack(spacing: 6) {
+            Text("Transcript")
+                .font(.system(size: 12, weight: .medium))
+            if !transcriptStore.utterances.isEmpty {
+                Text("(\(transcriptStore.utterances.count))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer()
+            if isTranscriptExpanded && !transcriptStore.utterances.isEmpty {
+                Button { copyTranscript() } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Copy transcript")
             }
         }
     }
@@ -326,10 +383,10 @@ struct ContentView: View {
 
     private func confirmDownloadAndStart() {
         transcriptionEngine?.downloadConfirmed = true
-        startSession()
+        startSession(autoStarted: false)
     }
 
-    private func startSession() {
+    private func startSession(autoStarted: Bool = false) {
         // Gate recording behind consent acknowledgment
         guard settings.hasAcknowledgedRecordingConsent else {
             withAnimation(.easeInOut(duration: 0.25)) {
@@ -337,6 +394,9 @@ struct ContentView: View {
             }
             return
         }
+
+        isAutoStarted = autoStarted
+        settings.isRecording = true
 
         Task {
             suggestionEngine?.clear()
@@ -351,6 +411,9 @@ struct ContentView: View {
     }
 
     private func stopSession() {
+        isAutoStarted = false
+        settings.isRecording = false
+
         Task {
             await coordinator.finalizeSession(
                 transcriptStore: transcriptStore,

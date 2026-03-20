@@ -9,7 +9,7 @@ struct WhisperAPIClient: Sendable {
     /// ISO 639-1 language code, e.g. "zh" for Mandarin, "" for auto-detect.
     let language: String
 
-    private let log = Logger(subsystem: "com.opengranola", category: "WhisperAPI")
+    private let log = Logger(subsystem: "com.openoats", category: "WhisperAPI")
 
     // MARK: - Factory methods
 
