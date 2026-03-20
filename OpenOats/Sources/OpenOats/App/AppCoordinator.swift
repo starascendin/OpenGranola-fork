@@ -85,8 +85,8 @@ final class AppCoordinator {
 
     var transcriptLogger: TranscriptLogger?
     var transcriptionEngine: TranscriptionEngine?
-    var refinementEngine: TranscriptRefinementEngine?
     var audioRecorder: AudioRecorder?
+    var kortexSyncManager: KortexSyncManager?
 
     /// The template snapshot frozen at session start (not stop).
     private var sessionTemplateSnapshot: TemplateSnapshot?
@@ -232,22 +232,8 @@ final class AppCoordinator {
         // 1. Drain audio buffers (flush final speech)
         await transcriptionEngine?.finalize()
 
-        // 1b. Drain pending refinements (5-second timeout)
-        if let settings, settings.enableTranscriptRefinement {
-            await refinementEngine?.drain(timeout: .seconds(5))
-        }
-
-        // 2. Drain delayed JSONL writes
-        await sessionStore.awaitPendingWrites()
-
-        // 2b. Backfill refined text into JSONL from TranscriptStore
-        // The 5-second delayed writes often miss refinedText because LLM calls take longer.
-        // By now both the refinement engine and pending writes have drained, so the
-        // TranscriptStore has the final refined text for all utterances.
+        // 2. Build sidecar from this session's transcript data
         let utterancesSnapshot = transcriptStore.utterances
-        await sessionStore.backfillRefinedText(from: utterancesSnapshot)
-
-        // 3. Build sidecar from this session's transcript data
         let sessionID = await sessionStore.currentSessionID ?? "unknown"
         let utteranceCount = transcriptStore.utterances.count
         let title = transcriptStore.conversationState.currentTopic.isEmpty
@@ -264,18 +250,38 @@ final class AppCoordinator {
         )
         let sidecar = SessionSidecar(index: index, notes: nil)
 
-        // 4. Write sidecar
+        // 3. Write sidecar
         await sessionStore.writeSidecar(sidecar)
 
-        // 5. Close JSONL file
+        // 4. Close JSONL file
         await sessionStore.endSession()
 
-        // 6. Close plain-text archive (after drain so final utterances are captured)
+        // 5. Close plain-text archive (after drain so final utterances are captured)
         await transcriptLogger?.endSession()
 
-        // 6b. Merge and encode audio recording (after all audio drained)
+        // 6. Merge and encode audio recording (after all audio drained)
+        let finalizedRecordingURL: URL?
         if let settings, settings.saveAudioRecording {
-            await audioRecorder?.finalizeRecording()
+            finalizedRecordingURL = await audioRecorder?.finalizeRecording()
+        } else {
+            finalizedRecordingURL = nil
+        }
+
+        if let settings {
+            let upload = KortexMeetingUpload(
+                externalSessionId: sessionID,
+                title: title,
+                startedAt: index.startedAt,
+                endedAt: index.endedAt,
+                utteranceCount: utteranceCount,
+                transcriptPreview: makeTranscriptPreview(from: utterancesSnapshot),
+                transcriptURL: await sessionStore.transcriptURL(for: sessionID),
+                sidecarURL: await sessionStore.metadataURL(for: sessionID),
+                audioURL: finalizedRecordingURL
+            )
+            Task { @MainActor [weak self] in
+                await self?.kortexSyncManager?.uploadMeeting(upload, settings: settings)
+            }
         }
 
         // 7. Update UI state + refresh history so Notes window sees the new session
@@ -287,6 +293,16 @@ final class AppCoordinator {
         silenceCheckTask?.cancel()
         silenceCheckTask = nil
         lastUtteranceAt = nil
+    }
+
+    private func makeTranscriptPreview(from utterances: [Utterance]) -> String? {
+        let preview = utterances
+            .prefix(6)
+            .map(\.displayText)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !preview.isEmpty else { return nil }
+        return String(preview.prefix(280))
     }
 
     // MARK: - History

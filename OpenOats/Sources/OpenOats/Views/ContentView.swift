@@ -9,7 +9,6 @@ private enum IdleTab {
 struct ContentView: View {
     private enum ControlBarAction {
         case toggle
-        case confirmDownload
     }
 
     private struct ViewState {
@@ -17,21 +16,14 @@ struct ContentView: View {
         var lastEndedSession: SessionIndex?
         var lastSessionHasNotes = false
         var modelDisplayName = ""
-        var transcriptionPrompt = ""
         var statusMessage: String?
         var errorMessage: String?
-        var needsDownload = false
-        var kbIndexingProgress = ""
-        var suggestions: [Suggestion] = []
-        var isGeneratingSuggestions = false
         var showLiveTranscript = true
         var utterances: [Utterance] = []
         var volatileYouText = ""
         var volatileThemText = ""
-        var kbFolderPath = ""
         var notesFolderPath = ""
-        var voyageApiKey = ""
-        var transcriptionModel: TranscriptionModel = .parakeetV2
+        var transcriptionModel: TranscriptionModel = .groq
         var inputDeviceID: AudioDeviceID = 0
     }
 
@@ -39,9 +31,6 @@ struct ContentView: View {
     @Environment(AppRuntime.self) private var runtime
     @Environment(AppCoordinator.self) private var coordinator
     @Environment(\.openWindow) private var openWindow
-    @State private var knowledgeBase: KnowledgeBase?
-    @State private var suggestionEngine: SuggestionEngine?
-    @State private var overlayManager = OverlayManager()
     @AppStorage("isTranscriptExpanded") private var isTranscriptExpanded = true
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = false
     @State private var showOnboarding = false
@@ -52,10 +41,8 @@ struct ContentView: View {
     @State private var observedUtteranceCount = 0
     @State private var observedIsRunning = false
     @State private var observedPendingExternalCommandID: UUID?
-    @State private var observedKBFolderPath = ""
     @State private var observedNotesFolderPath = ""
-    @State private var observedVoyageApiKey = ""
-    @State private var observedTranscriptionModel: TranscriptionModel = .parakeetV2
+    @State private var observedTranscriptionModel: TranscriptionModel = .groq
     @State private var observedInputDeviceID: AudioDeviceID = 0
     @State private var idleTab: IdleTab = .sessions
 
@@ -69,18 +56,10 @@ struct ContentView: View {
         return VStack(spacing: 0) {
             // Compact header
             HStack {
-                Text("OpenOats")
+                Text(KortexOatsIdentity.appDisplayName)
                     .font(.system(size: 13, weight: .semibold))
 
                 Spacer()
-
-                // KB indexing status (subtle, read-only)
-                if !viewState.kbIndexingProgress.isEmpty {
-                    Text(viewState.kbIndexingProgress)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
 
                 Button {
                     openWindow(id: "notes")
@@ -160,58 +139,47 @@ struct ContentView: View {
             }
 
             if viewState.isRunning || idleTab == .sessions {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("SUGGESTIONS")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .tracking(1.5)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 12)
-                        .padding(.bottom, 4)
-                    SuggestionsView(
-                        suggestions: viewState.suggestions,
-                        isGenerating: viewState.isGeneratingSuggestions
-                    )
-                }
-
-                Divider()
-
-                if viewState.showLiveTranscript {
-                    DisclosureGroup(isExpanded: $isTranscriptExpanded) {
-                        TranscriptView(
-                            utterances: viewState.utterances,
-                            volatileYouText: viewState.volatileYouText,
-                            volatileThemText: viewState.volatileThemText
-                        )
-                        .frame(height: 150)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text("Transcript")
-                                .font(.system(size: 12, weight: .medium))
-                            if !viewState.utterances.isEmpty {
-                                Text("(\(viewState.utterances.count))")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            Spacer()
-                            if isTranscriptExpanded && !viewState.utterances.isEmpty {
-                                Button {
-                                    copyTranscript()
-                                } label: {
-                                    Image(systemName: "doc.on.doc")
+                VStack(spacing: 0) {
+                    if viewState.showLiveTranscript {
+                        DisclosureGroup(isExpanded: $isTranscriptExpanded) {
+                            TranscriptView(
+                                utterances: viewState.utterances,
+                                volatileYouText: viewState.volatileYouText,
+                                volatileThemText: viewState.volatileThemText
+                            )
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text("Transcript")
+                                    .font(.system(size: 12, weight: .medium))
+                                if !viewState.utterances.isEmpty {
+                                    Text("(\(viewState.utterances.count))")
                                         .font(.system(size: 11))
-                                        .foregroundStyle(.secondary)
-                                        .padding(4)
-                                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                                        .foregroundStyle(.tertiary)
                                 }
-                                .buttonStyle(.plain)
-                                .help("Copy transcript")
+                                Spacer()
+                                if isTranscriptExpanded && !viewState.utterances.isEmpty {
+                                    Button {
+                                        copyTranscript()
+                                    } label: {
+                                        Image(systemName: "doc.on.doc")
+                                            .font(.system(size: 11))
+                                            .foregroundStyle(.secondary)
+                                            .padding(4)
+                                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Copy transcript")
+                                }
                             }
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
+
+                    Spacer()
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 Divider()
             } else {
@@ -226,15 +194,10 @@ struct ContentView: View {
                 isRunning: viewState.isRunning,
                 audioLevel: audioLevel,
                 modelDisplayName: viewState.modelDisplayName,
-                transcriptionPrompt: viewState.transcriptionPrompt,
                 statusMessage: viewState.statusMessage,
                 errorMessage: viewState.errorMessage,
-                needsDownload: viewState.needsDownload,
                 onToggle: {
                     pendingControlBarAction = .toggle
-                },
-                onConfirmDownload: {
-                    pendingControlBarAction = .confirmDownload
                 }
             )
         }
@@ -246,7 +209,7 @@ struct ContentView: View {
 
     private var sizedRootContent: some View {
         rootContent
-            .frame(minWidth: 360, maxWidth: 600, minHeight: 400)
+            .frame(minWidth: 360, maxWidth: 600, minHeight: 400, idealHeight: 560)
             .background(.ultraThinMaterial)
     }
 
@@ -282,19 +245,14 @@ struct ContentView: View {
             if !hasCompletedOnboarding {
                 showOnboarding = true
             }
-            if knowledgeBase == nil {
+            if coordinator.transcriptionEngine == nil {
                 let services = runtime.makeServices(settings: settings, coordinator: coordinator)
-                knowledgeBase = services.knowledgeBase
-                suggestionEngine = services.suggestionEngine
                 coordinator.transcriptionEngine = services.transcriptionEngine
                 coordinator.transcriptLogger = services.transcriptLogger
-                coordinator.refinementEngine = services.refinementEngine
                 coordinator.audioRecorder = services.audioRecorder
             }
-            overlayManager.defaults = runtime.defaults
             await runtime.seedIfNeeded(coordinator: coordinator)
             refreshViewState()
-            indexKBIfNeeded()
             handlePendingExternalCommandIfPossible()
 
             // Purge recently deleted sessions older than 24h
@@ -320,10 +278,6 @@ struct ContentView: View {
 
     private var contentWithEventHandlers: some View {
         contentWithLifecycle
-        .onKeyPress(.escape) {
-            overlayManager.hide()
-            return .handled
-        }
         .task {
             refreshViewState()
             synchronizeDerivedState()
@@ -347,7 +301,6 @@ struct ContentView: View {
             return
         }
 
-        suggestionEngine?.clear()
         let metadata = MeetingMetadata(
             detectionContext: DetectionContext(
                 signal: .manual,
@@ -367,23 +320,6 @@ struct ContentView: View {
         coordinator.handle(.userStopped, settings: settings)
     }
 
-    private func toggleOverlay() {
-        let content = OverlayContent(
-            suggestions: viewState.suggestions,
-            isGenerating: viewState.isGeneratingSuggestions,
-            volatileThemText: viewState.volatileThemText
-        )
-        overlayManager.toggle(content: content)
-    }
-
-    private func indexKBIfNeeded() {
-        guard let url = settings.kbFolderURL, let kb = knowledgeBase else { return }
-        Task {
-            kb.clear()
-            await kb.index(folderURL: url)
-        }
-    }
-
     private func copyTranscript() {
         let timeFmt = DateFormatter()
         timeFmt.dateFormat = "HH:mm:ss"
@@ -400,7 +336,7 @@ struct ContentView: View {
 
         switch request.command {
         case .startSession:
-            guard coordinator.transcriptionEngine != nil, suggestionEngine != nil, coordinator.transcriptLogger != nil else {
+            guard coordinator.transcriptionEngine != nil, coordinator.transcriptLogger != nil else {
                 return
             }
             if !viewState.isRunning {
@@ -435,40 +371,12 @@ struct ContentView: View {
             )
         }
 
-        // Trigger transcript refinement if enabled
-        if settings.enableTranscriptRefinement, let engine = coordinator.refinementEngine {
-            Task {
-                await engine.refine(last)
-            }
-        }
-
-        // Trigger suggestions on THEM utterance
-        if last.speaker == .them {
-            suggestionEngine?.onThemUtterance(last)
-
-            // Delayed write owned by SessionStore (tracks pending writes for drain)
-            let baseRecord = SessionRecord(
+        Task {
+            await coordinator.sessionStore.appendRecord(SessionRecord(
                 speaker: last.speaker,
                 text: last.text,
                 timestamp: last.timestamp
-            )
-            Task {
-                await coordinator.sessionStore.appendRecordDelayed(
-                    baseRecord: baseRecord,
-                    utteranceID: last.id,
-                    suggestionEngine: suggestionEngine,
-                    transcriptStore: coordinator.transcriptStore
-                )
-            }
-        } else {
-            // Log non-them utterances immediately
-            Task {
-                await coordinator.sessionStore.appendRecord(SessionRecord(
-                    speaker: last.speaker,
-                    text: last.text,
-                    timestamp: last.timestamp
-                ))
-            }
+            ))
         }
     }
 
@@ -488,31 +396,18 @@ struct ContentView: View {
             coordinator.sessionHistory.first { $0.id == lastSession.id }?.hasNotes
         } ?? false
 
-        let activeModelRaw = switch settings.llmProvider {
-        case .openRouter: settings.selectedModel
-        case .ollama: settings.ollamaLLMModel
-        case .mlx: settings.mlxModel
-        }
-
         var nextViewState = ViewState()
         nextViewState.isRunning = coordinator.transcriptionEngine?.isRunning ?? false
         nextViewState.lastEndedSession = lastEndedSession
         nextViewState.lastSessionHasNotes = lastSessionHasNotes
-        nextViewState.modelDisplayName = activeModelRaw.split(separator: "/").last.map(String.init) ?? activeModelRaw
-        nextViewState.transcriptionPrompt = settings.transcriptionModel.downloadPrompt
+        nextViewState.modelDisplayName = settings.transcriptionModel.displayName
         nextViewState.statusMessage = coordinator.transcriptionEngine?.assetStatus
         nextViewState.errorMessage = coordinator.transcriptionEngine?.lastError
-        nextViewState.needsDownload = coordinator.transcriptionEngine?.needsModelDownload ?? false
-        nextViewState.kbIndexingProgress = knowledgeBase?.indexingProgress ?? ""
-        nextViewState.suggestions = suggestionEngine?.suggestions ?? []
-        nextViewState.isGeneratingSuggestions = suggestionEngine?.isGenerating ?? false
         nextViewState.showLiveTranscript = settings.showLiveTranscript
         nextViewState.utterances = coordinator.transcriptStore.utterances
         nextViewState.volatileYouText = coordinator.transcriptStore.volatileYouText
         nextViewState.volatileThemText = coordinator.transcriptStore.volatileThemText
-        nextViewState.kbFolderPath = settings.kbFolderPath
         nextViewState.notesFolderPath = settings.notesFolderPath
-        nextViewState.voyageApiKey = settings.voyageApiKey
         nextViewState.transcriptionModel = settings.transcriptionModel
         nextViewState.inputDeviceID = settings.inputDeviceID
 
@@ -523,15 +418,6 @@ struct ContentView: View {
     private func synchronizeDerivedState() {
         let currentViewState = viewState
 
-        if currentViewState.kbFolderPath != observedKBFolderPath {
-            observedKBFolderPath = currentViewState.kbFolderPath
-            if currentViewState.kbFolderPath.isEmpty {
-                knowledgeBase?.clear()
-            } else {
-                indexKBIfNeeded()
-            }
-        }
-
         if currentViewState.notesFolderPath != observedNotesFolderPath {
             observedNotesFolderPath = currentViewState.notesFolderPath
             let url = URL(fileURLWithPath: currentViewState.notesFolderPath)
@@ -539,11 +425,6 @@ struct ContentView: View {
                 await coordinator.transcriptLogger?.updateDirectory(url)
             }
             coordinator.audioRecorder?.updateDirectory(url)
-        }
-
-        if currentViewState.voyageApiKey != observedVoyageApiKey {
-            observedVoyageApiKey = currentViewState.voyageApiKey
-            indexKBIfNeeded()
         }
 
         if currentViewState.transcriptionModel != observedTranscriptionModel {
@@ -598,9 +479,6 @@ struct ContentView: View {
             } else {
                 startSession()
             }
-        case .confirmDownload:
-            coordinator.transcriptionEngine?.downloadConfirmed = true
-            startSession()
         }
     }
 }

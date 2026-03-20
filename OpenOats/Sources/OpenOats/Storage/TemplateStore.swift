@@ -18,8 +18,7 @@ final class TemplateStore {
         if let rootDirectory {
             dir = rootDirectory
         } else {
-            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            dir = appSupport.appendingPathComponent("OpenOats", isDirectory: true)
+            dir = KortexOatsIdentity.appSupportDirectory()
         }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         storageURL = dir.appendingPathComponent("templates.json")

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ClerkKit
 import Sparkle
 
 public struct OpenOatsRootApp: App {
@@ -8,6 +9,7 @@ public struct OpenOatsRootApp: App {
     @State private var settings: AppSettings
     @State private var coordinator: AppCoordinator
     @State private var runtime: AppRuntime
+    @State private var kortexSyncManager: KortexSyncManager
     private let updaterController: AppUpdaterController
     private let defaults: UserDefaults
 
@@ -16,19 +18,23 @@ public struct OpenOatsRootApp: App {
         self._settings = State(initialValue: context.settings)
         self._coordinator = State(initialValue: context.coordinator)
         self._runtime = State(initialValue: context.runtime)
+        self._kortexSyncManager = State(initialValue: KortexSyncManager())
         self.updaterController = context.updaterController
         self.defaults = context.runtime.defaults
     }
 
     public var body: some Scene {
-        Window("OpenOats", id: "main") {
+        Window("", id: "main") {
             ContentView(settings: settings)
                 .environment(runtime)
                 .environment(coordinator)
+                .environment(kortexSyncManager)
+                .environment(Clerk.shared)
                 .defaultAppStorage(defaults)
                 .onAppear {
                     appDelegate.coordinator = coordinator
                     appDelegate.defaults = defaults
+                    coordinator.kortexSyncManager = kortexSyncManager
                     settings.applyScreenShareVisibility()
                 }
                 .onOpenURL { url in
@@ -44,7 +50,7 @@ public struct OpenOatsRootApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
-        .defaultSize(width: 320, height: 560)
+        .defaultSize(width: 400, height: 560)
         .commands {
             CommandGroup(after: .appInfo) {
                 if case .live = runtime.mode {
@@ -59,7 +65,7 @@ public struct OpenOatsRootApp: App {
                 .keyboardShortcut("m", modifiers: [.command, .shift])
 
                 Button("GitHub Repository...") {
-                    if let url = URL(string: "https://github.com/yazinsai/OpenOats") {
+                    if let url = URL(string: "https://github.com/starascendin/OpenGranola-fork") {
                         NSWorkspace.shared.open(url)
                     }
                 }
@@ -70,6 +76,8 @@ public struct OpenOatsRootApp: App {
             NotesView(settings: settings)
                 .environment(runtime)
                 .environment(coordinator)
+                .environment(kortexSyncManager)
+                .environment(Clerk.shared)
                 .defaultAppStorage(defaults)
         }
         .defaultSize(width: 700, height: 550)
@@ -78,6 +86,8 @@ public struct OpenOatsRootApp: App {
             SettingsView(settings: settings, updater: updaterController.updater)
                 .environment(runtime)
                 .environment(coordinator)
+                .environment(kortexSyncManager)
+                .environment(Clerk.shared)
                 .defaultAppStorage(defaults)
         }
 
@@ -119,13 +129,13 @@ private struct MenuBarMenuView: View {
             Label("Recording in progress", systemImage: "circle.fill")
                 .foregroundStyle(.red)
         } else {
-            Text("OpenOats")
+            Text(KortexOatsIdentity.appDisplayName)
                 .foregroundStyle(.secondary)
         }
 
         Divider()
 
-        Button("Open OpenOats") {
+        Button("Open \(KortexOatsIdentity.appDisplayName)") {
             openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)
         }
@@ -137,7 +147,7 @@ private struct MenuBarMenuView: View {
             NSApp.activate(ignoringOtherApps: true)
         }
 
-        Button("Quit OpenOats") {
+        Button("Quit \(KortexOatsIdentity.appDisplayName)") {
             NSApp.terminate(nil)
         }
     }
@@ -181,6 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         for window in NSApp.windows {
             window.sharingType = sharingType
+            window.titleVisibility = .hidden
         }
 
         // Watch for new windows being created (e.g. Settings window)
@@ -196,6 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let type: NSWindow.SharingType = hide ? .none : .readOnly
                 for window in NSApp.windows {
                     window.sharingType = type
+                    window.titleVisibility = .hidden
                 }
             }
         }

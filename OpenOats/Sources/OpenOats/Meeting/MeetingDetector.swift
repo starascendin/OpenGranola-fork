@@ -169,7 +169,7 @@ actor MeetingDetector {
     ) {
         self.audioSource = audioSource ?? CoreAudioSignalSource()
         self.customBundleIDs = customBundleIDs
-        self.selfBundleID = Bundle.main.bundleIdentifier ?? "com.openoats.app"
+        self.selfBundleID = Bundle.main.bundleIdentifier ?? KortexOatsIdentity.bundleIdentifier
 
         // Known meeting apps (embedded to avoid Bundle.module issues in
         // manually-constructed .app bundles)

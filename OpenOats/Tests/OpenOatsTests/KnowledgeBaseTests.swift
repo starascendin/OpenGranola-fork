@@ -1,7 +1,7 @@
 import XCTest
 @testable import OpenOatsKit
 
-final class KnowledgeBaseTests: XCTestCase {
+final class TextSimilarityTests: XCTestCase {
 
     // MARK: - TextSimilarity.normalizedWords
 
@@ -81,25 +81,6 @@ final class KnowledgeBaseTests: XCTestCase {
         let score = TextSimilarity.jaccard("hello", "hello world")
         // Intersection = 1, Union = 2
         XCTAssertEqual(score, 0.5, accuracy: 0.001)
-    }
-
-    // MARK: - KBChunk Model
-
-    func testKBChunkCodable() throws {
-        let chunk = KBChunk(
-            text: "Some knowledge base text",
-            sourceFile: "notes.md",
-            headerContext: "Section > Subsection",
-            embedding: [0.1, 0.2, 0.3]
-        )
-
-        let data = try JSONEncoder().encode(chunk)
-        let decoded = try JSONDecoder().decode(KBChunk.self, from: data)
-
-        XCTAssertEqual(decoded.text, "Some knowledge base text")
-        XCTAssertEqual(decoded.sourceFile, "notes.md")
-        XCTAssertEqual(decoded.headerContext, "Section > Subsection")
-        XCTAssertEqual(decoded.embedding, [0.1, 0.2, 0.3])
     }
 
     // MARK: - KBResult Model

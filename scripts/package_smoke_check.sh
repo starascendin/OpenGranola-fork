@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-APP_PATH="dist/OpenOats.app"
+APP_PATH="dist/KortexOats(Dev).app"
 APP_BINARY="$APP_PATH/Contents/MacOS/OpenOats"
 INFO_PLIST="$APP_PATH/Contents/Info.plist"
 PKGINFO="$APP_PATH/Contents/PkgInfo"

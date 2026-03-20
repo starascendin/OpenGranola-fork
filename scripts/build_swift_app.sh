@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build macOS .app for OpenOats (Swift)
+# Build macOS .app for KortexOats(Dev) (Swift)
 # Usage:
 #   ./scripts/build_swift_app.sh
 #
@@ -19,8 +19,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT_DIR="$(pwd)"
 SWIFT_DIR="$ROOT_DIR/OpenOats"
-APP_NAME="OpenOats"
-BUNDLE_ID="com.openoats.app"
+APP_NAME="KortexOats(Dev)"
+BUNDLE_ID="com.mwopenoats.app"
 SKIP_SIGN="${SKIP_SIGN:-0}"
 SKIP_INSTALL="${SKIP_INSTALL:-0}"
 

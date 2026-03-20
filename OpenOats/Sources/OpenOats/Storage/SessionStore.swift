@@ -10,17 +10,12 @@ actor SessionStore {
     /// The filename stem of the current session (e.g. "session_2026-03-18_14-30-00").
     private(set) var currentSessionID: String?
 
-    /// Tracks in-flight delayed writes.
-    private var pendingWrites = 0
-    private var pendingWriteWaiters: [CheckedContinuation<Void, Never>] = []
-
     init(rootDirectory: URL? = nil) {
         let baseDirectory: URL
         if let rootDirectory {
             baseDirectory = rootDirectory
         } else {
-            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            baseDirectory = appSupport.appendingPathComponent("OpenOats", isDirectory: true)
+            baseDirectory = KortexOatsIdentity.appSupportDirectory()
         }
         sessionsDirectory = baseDirectory.appendingPathComponent("sessions", isDirectory: true)
 
@@ -64,153 +59,6 @@ actor SessionStore {
         }
     }
 
-    /// Owns the delayed THEM write: sleeps 5 seconds to capture pipeline results, then writes.
-    /// The actor tracks in-flight delayed writes so `awaitPendingWrites()` can drain them.
-    func appendRecordDelayed(
-        baseRecord: SessionRecord,
-        utteranceID: UUID? = nil,
-        suggestionEngine: SuggestionEngine?,
-        transcriptStore: TranscriptStore?
-    ) {
-        pendingWrites += 1
-        Task { [weak self] in
-            try? await Task.sleep(for: .seconds(5))
-
-            guard let self else { return }
-
-            // Capture pipeline results after delay
-            let decision = await suggestionEngine?.lastDecision
-            let latestSuggestion = await suggestionEngine?.suggestions.first
-            let summary = await transcriptStore?.conversationState.shortSummary
-
-            // Capture refined text from transcript store (may have been updated by refinement engine)
-            let refinedText: String?
-            if let utteranceID, let store = transcriptStore {
-                refinedText = await store.utterances.first(where: { $0.id == utteranceID })?.refinedText
-            } else {
-                refinedText = baseRecord.refinedText
-            }
-
-            let enrichedRecord = SessionRecord(
-                speaker: baseRecord.speaker,
-                text: baseRecord.text,
-                timestamp: baseRecord.timestamp,
-                suggestions: latestSuggestion.map { [$0.text] },
-                kbHits: latestSuggestion?.kbHits.map { $0.sourceFile },
-                suggestionDecision: decision,
-                surfacedSuggestionText: decision?.shouldSurface == true ? latestSuggestion?.text : nil,
-                conversationStateSummary: summary?.isEmpty == false ? summary : nil,
-                refinedText: refinedText
-            )
-
-            await self.appendRecord(enrichedRecord)
-
-            await self.decrementPendingWrites()
-        }
-    }
-
-    private func decrementPendingWrites() {
-        pendingWrites -= 1
-        if pendingWrites == 0 {
-            let waiters = pendingWriteWaiters
-            pendingWriteWaiters.removeAll()
-            for waiter in waiters {
-                waiter.resume()
-            }
-        }
-    }
-
-    /// Suspends until all in-flight delayed writes have completed.
-    func awaitPendingWrites() async {
-        guard pendingWrites > 0 else { return }
-        await withCheckedContinuation { continuation in
-            pendingWriteWaiters.append(continuation)
-        }
-    }
-
-    /// Rewrite the current JSONL file, backfilling `refinedText` from the in-memory TranscriptStore.
-    ///
-    /// The 5-second delayed write often captures `refinedText` as nil because the LLM refinement
-    /// call hasn't finished yet. This method is called after both the refinement engine and pending
-    /// writes have drained, so the TranscriptStore now has the final refined text for all utterances.
-    func backfillRefinedText(from utterances: [Utterance]) {
-        guard let currentFile else { return }
-
-        // Close the file handle so we can read/rewrite the file safely
-        try? fileHandle?.close()
-        fileHandle = nil
-
-        guard let content = try? String(contentsOf: currentFile, encoding: .utf8) else { return }
-
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-
-        let lines = content.components(separatedBy: "\n").filter { !$0.isEmpty }
-        guard !lines.isEmpty else { return }
-
-        // Build a lookup from (timestamp, speaker) -> refinedText
-        // Uses ISO8601 string representation of the date for reliable matching
-        let iso8601Formatter = ISO8601DateFormatter()
-        iso8601Formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        var refinedLookup: [String: String] = [:]
-        for utterance in utterances {
-            guard let refined = utterance.refinedText else { continue }
-            let key = "\(iso8601Formatter.string(from: utterance.timestamp))|\(utterance.speaker.rawValue)"
-            refinedLookup[key] = refined
-        }
-
-        guard !refinedLookup.isEmpty else {
-            // No refined text to backfill; reopen file handle and return
-            fileHandle = try? FileHandle(forWritingTo: currentFile)
-            return
-        }
-
-        var updatedLines: [String] = []
-        var anyUpdated = false
-
-        for line in lines {
-            guard let data = line.data(using: .utf8),
-                  var record = try? decoder.decode(SessionRecord.self, from: data) else {
-                updatedLines.append(line)
-                continue
-            }
-
-            // Only backfill if the record doesn't already have refinedText
-            if record.refinedText == nil {
-                let key = "\(iso8601Formatter.string(from: record.timestamp))|\(record.speaker.rawValue)"
-                if let refined = refinedLookup[key] {
-                    record = SessionRecord(
-                        speaker: record.speaker,
-                        text: record.text,
-                        timestamp: record.timestamp,
-                        suggestions: record.suggestions,
-                        kbHits: record.kbHits,
-                        suggestionDecision: record.suggestionDecision,
-                        surfacedSuggestionText: record.surfacedSuggestionText,
-                        conversationStateSummary: record.conversationStateSummary,
-                        refinedText: refined
-                    )
-                    anyUpdated = true
-                }
-            }
-
-            if let encoded = try? encoder.encode(record),
-               let jsonString = String(data: encoded, encoding: .utf8) {
-                updatedLines.append(jsonString)
-            } else {
-                updatedLines.append(line)
-            }
-        }
-
-        if anyUpdated {
-            let newContent = updatedLines.joined(separator: "\n") + "\n"
-            try? newContent.write(to: currentFile, atomically: true, encoding: .utf8)
-        }
-
-        // Reopen file handle for any subsequent writes before endSession()
-        fileHandle = try? FileHandle(forWritingTo: currentFile)
-    }
-
     func endSession() {
         try? fileHandle?.close()
         fileHandle = nil
@@ -226,6 +74,14 @@ actor SessionStore {
 
     private func jsonlURL(for sessionID: String) -> URL {
         sessionsDirectory.appendingPathComponent("\(sessionID).jsonl")
+    }
+
+    func transcriptURL(for sessionID: String) -> URL {
+        jsonlURL(for: sessionID)
+    }
+
+    func metadataURL(for sessionID: String) -> URL {
+        sidecarURL(for: sessionID)
     }
 
     func writeSidecar(_ sidecar: SessionSidecar) {

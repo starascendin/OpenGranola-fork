@@ -66,8 +66,8 @@ final class AudioPlayerController {
 // MARK: - Recordings View
 
 struct RecordingsView: View {
-    @AppStorage("notesFolderPath") private var notesFolderPath = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Documents/OpenOats", isDirectory: true).path
+    @AppStorage("notesFolderPath") private var notesFolderPath =
+        KortexOatsIdentity.defaultNotesDirectory().path
     @State private var recordings: [(url: URL, duration: TimeInterval)] = []
     @State private var controller = AudioPlayerController()
     @State private var isDragging = false

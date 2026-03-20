@@ -13,11 +13,8 @@ enum AppRuntimeMode {
 }
 
 struct AppServices {
-    let knowledgeBase: KnowledgeBase
-    let suggestionEngine: SuggestionEngine
     let transcriptionEngine: TranscriptionEngine
     let transcriptLogger: TranscriptLogger
-    let refinementEngine: TranscriptRefinementEngine
     let audioRecorder: AudioRecorder
 }
 
@@ -61,12 +58,8 @@ final class AppRuntime {
             let runtime = AppRuntime(
                 mode: .live,
                 defaults: .standard,
-                appSupportDirectory: FileManager.default.urls(
-                    for: .applicationSupportDirectory,
-                    in: .userDomainMask
-                ).first!.appendingPathComponent("OpenOats", isDirectory: true),
-                notesDirectory: FileManager.default.homeDirectoryForCurrentUser
-                    .appendingPathComponent("Documents/OpenOats", isDirectory: true)
+                appSupportDirectory: KortexOatsIdentity.appSupportDirectory(),
+                notesDirectory: KortexOatsIdentity.defaultNotesDirectory()
             )
             let settings = AppSettings()
             let coordinator = AppCoordinator()
@@ -81,14 +74,14 @@ final class AppRuntime {
         case .uiTest(let scenario):
             let runID = environment["OPENOATS_UI_TEST_RUN_ID"] ?? UUID().uuidString
             let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-                .appendingPathComponent("OpenOatsUITests", isDirectory: true)
+                .appendingPathComponent("KortexOatsDevUITests", isDirectory: true)
                 .appendingPathComponent(runID, isDirectory: true)
             let appSupportDirectory = root.appendingPathComponent("ApplicationSupport", isDirectory: true)
             let notesDirectory = root.appendingPathComponent("Notes", isDirectory: true)
             try? FileManager.default.createDirectory(at: appSupportDirectory, withIntermediateDirectories: true)
             try? FileManager.default.createDirectory(at: notesDirectory, withIntermediateDirectories: true)
 
-            let suiteName = "com.openoats.uitests.\(runID)"
+            let suiteName = "com.mwopenoats.app.uitests.\(runID)"
             let defaults = UserDefaults(suiteName: suiteName) ?? .standard
             defaults.removePersistentDomain(forName: suiteName)
             defaults.set(true, forKey: "hasCompletedOnboarding")
@@ -98,9 +91,7 @@ final class AppRuntime {
             defaults.set(false, forKey: "hideFromScreenShare")
             defaults.set(true, forKey: "showLiveTranscript")
             defaults.set(false, forKey: "saveAudioRecording")
-            defaults.set(false, forKey: "enableTranscriptRefinement")
             defaults.set(notesDirectory.path, forKey: "notesFolderPath")
-            defaults.set("", forKey: "kbFolderPath")
 
             let storage = AppSettingsStorage(
                 defaults: defaults,
@@ -133,13 +124,6 @@ final class AppRuntime {
     }
 
     func makeServices(settings: AppSettings, coordinator: AppCoordinator) -> AppServices {
-        let knowledgeBase = KnowledgeBase(settings: settings)
-        let suggestionEngine = SuggestionEngine(
-            transcriptStore: coordinator.transcriptStore,
-            knowledgeBase: knowledgeBase,
-            settings: settings
-        )
-
         let transcriptionEngine: TranscriptionEngine
         switch mode {
         case .live:
@@ -156,14 +140,8 @@ final class AppRuntime {
         }
 
         return AppServices(
-            knowledgeBase: knowledgeBase,
-            suggestionEngine: suggestionEngine,
             transcriptionEngine: transcriptionEngine,
             transcriptLogger: TranscriptLogger(directory: notesDirectory),
-            refinementEngine: TranscriptRefinementEngine(
-                settings: settings,
-                transcriptStore: coordinator.transcriptStore
-            ),
             audioRecorder: AudioRecorder(outputDirectory: notesDirectory)
         )
     }

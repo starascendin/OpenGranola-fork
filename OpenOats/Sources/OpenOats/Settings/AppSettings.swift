@@ -21,86 +21,36 @@ enum LLMProvider: String, CaseIterable, Identifiable {
 }
 
 enum TranscriptionModel: String, CaseIterable, Identifiable {
-    case parakeetV2
-    case parakeetV3
-    case qwen3ASR06B
     case groq
     case zai
-    case whisperBase
-    case whisperSmall
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .parakeetV2: "Parakeet TDT v2"
-        case .parakeetV3: "Parakeet TDT v3"
-        case .qwen3ASR06B: "Qwen3 ASR 0.6B"
         case .groq: "Groq (Whisper Large v3)"
         case .zai: "ZhipuAI / ZAI"
-        case .whisperBase: "Whisper Base"
-        case .whisperSmall: "Whisper Small"
         }
     }
 
     var downloadPrompt: String {
-        switch self {
-        case .parakeetV2, .parakeetV3:
-            "Transcription requires a one-time model download."
-        case .qwen3ASR06B:
-            "Qwen3 ASR requires a one-time model download."
-        case .groq, .zai:
-            ""
-        case .whisperBase:
-            "Whisper Base requires a one-time model download (~142 MB)."
-        case .whisperSmall:
-            "Whisper Small requires a one-time model download (~244 MB)."
-        }
+        ""
     }
 
     var supportsExplicitLanguageHint: Bool {
-        switch self {
-        case .qwen3ASR06B, .groq, .zai:
-            true
-        case .parakeetV2, .parakeetV3, .whisperBase, .whisperSmall:
-            false
-        }
+        true
     }
 
     var localeFieldTitle: String {
-        switch self {
-        case .qwen3ASR06B:
-            "Language Hint"
-        case .groq, .zai:
-            "Language"
-        case .parakeetV2, .parakeetV3, .whisperBase, .whisperSmall:
-            "Locale"
-        }
+        "Language"
     }
 
     var localeHelpText: String {
         switch self {
-        case .parakeetV2:
-            "Parakeet TDT v2 is English-only. Locale changes do not affect this model."
-        case .parakeetV3:
-            "Parakeet TDT v3 auto-detects among its supported languages. Locale changes do not affect this model."
-        case .qwen3ASR06B:
-            "Optional. Used as a language hint for Qwen3 ASR. Enter a locale such as en-US, fr-FR, or ja-JP. Applies when a new session starts."
         case .groq:
             "Optional. Language code for Whisper (e.g. en, zh, fr). Leave empty for auto-detection."
         case .zai:
             "Optional. Language code (e.g. en, zh, ja). Optimized for Chinese. Leave empty for auto-detection."
-        case .whisperBase, .whisperSmall:
-            "Whisper auto-detects the spoken language. Locale changes do not affect this model."
-        }
-    }
-
-    /// The WhisperKit model variant, if this is a Whisper-based model.
-    var whisperVariant: WhisperKitManager.Variant? {
-        switch self {
-        case .whisperBase: .base
-        case .whisperSmall: .small
-        default: nil
         }
     }
 
@@ -110,29 +60,8 @@ enum TranscriptionModel: String, CaseIterable, Identifiable {
         zaiApiKey: String = ""
     ) -> any TranscriptionBackend {
         switch self {
-        case .parakeetV2: return ParakeetBackend(version: .v2, customVocabulary: customVocabulary)
-        case .parakeetV3: return ParakeetBackend(version: .v3, customVocabulary: customVocabulary)
-        case .qwen3ASR06B: return Qwen3Backend()
         case .groq: return RemoteWhisperBackend(provider: .groq(apiKey: groqApiKey))
         case .zai: return RemoteWhisperBackend(provider: .zai(apiKey: zaiApiKey))
-        case .whisperBase: return WhisperKitBackend(variant: .base)
-        case .whisperSmall: return WhisperKitBackend(variant: .small)
-        }
-    }
-}
-
-enum EmbeddingProvider: String, CaseIterable, Identifiable {
-    case voyageAI
-    case ollama
-    case openAICompatible
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .voyageAI: "Voyage AI"
-        case .ollama: "Ollama"
-        case .openAICompatible: "OpenAI Compatible"
         }
     }
 }
@@ -172,8 +101,7 @@ struct AppSettingsStorage {
         AppSettingsStorage(
             defaults: defaults,
             secretStore: .keychain,
-            defaultNotesDirectory: FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Documents/OpenOats"),
+            defaultNotesDirectory: KortexOatsIdentity.defaultNotesDirectory(),
             runMigrations: true
         )
     }
@@ -188,17 +116,6 @@ final class AppSettings {
     // SwiftUI can evaluate view bodies outside a MainActor executor context in
     // Swift 6.2. Use nonisolated backing storage plus manual observation
     // tracking so bound settings remain safe to read during those updates.
-    @ObservationIgnored nonisolated(unsafe) private var _kbFolderPath: String
-    var kbFolderPath: String {
-        get { access(keyPath: \.kbFolderPath); return _kbFolderPath }
-        set {
-            withMutation(keyPath: \.kbFolderPath) {
-                _kbFolderPath = newValue
-                defaults.set(newValue, forKey: "kbFolderPath")
-            }
-        }
-    }
-
     @ObservationIgnored nonisolated(unsafe) private var _notesFolderPath: String
     var notesFolderPath: String {
         get { access(keyPath: \.notesFolderPath); return _notesFolderPath }
@@ -299,17 +216,6 @@ final class AppSettings {
         }
     }
 
-    @ObservationIgnored nonisolated(unsafe) private var _voyageApiKey: String
-    var voyageApiKey: String {
-        get { access(keyPath: \.voyageApiKey); return _voyageApiKey }
-        set {
-            withMutation(keyPath: \.voyageApiKey) {
-                _voyageApiKey = newValue
-                secretStore.save(key: "voyageApiKey", value: newValue)
-            }
-        }
-    }
-
     @ObservationIgnored nonisolated(unsafe) private var _llmProvider: LLMProvider
     var llmProvider: LLMProvider {
         get { access(keyPath: \.llmProvider); return _llmProvider }
@@ -317,17 +223,6 @@ final class AppSettings {
             withMutation(keyPath: \.llmProvider) {
                 _llmProvider = newValue
                 defaults.set(newValue.rawValue, forKey: "llmProvider")
-            }
-        }
-    }
-
-    @ObservationIgnored nonisolated(unsafe) private var _embeddingProvider: EmbeddingProvider
-    var embeddingProvider: EmbeddingProvider {
-        get { access(keyPath: \.embeddingProvider); return _embeddingProvider }
-        set {
-            withMutation(keyPath: \.embeddingProvider) {
-                _embeddingProvider = newValue
-                defaults.set(newValue.rawValue, forKey: "embeddingProvider")
             }
         }
     }
@@ -354,17 +249,6 @@ final class AppSettings {
         }
     }
 
-    @ObservationIgnored nonisolated(unsafe) private var _ollamaEmbedModel: String
-    var ollamaEmbedModel: String {
-        get { access(keyPath: \.ollamaEmbedModel); return _ollamaEmbedModel }
-        set {
-            withMutation(keyPath: \.ollamaEmbedModel) {
-                _ollamaEmbedModel = newValue
-                defaults.set(newValue, forKey: "ollamaEmbedModel")
-            }
-        }
-    }
-
     @ObservationIgnored nonisolated(unsafe) private var _mlxBaseURL: String
     var mlxBaseURL: String {
         get { access(keyPath: \.mlxBaseURL); return _mlxBaseURL }
@@ -383,39 +267,6 @@ final class AppSettings {
             withMutation(keyPath: \.mlxModel) {
                 _mlxModel = newValue
                 defaults.set(newValue, forKey: "mlxModel")
-            }
-        }
-    }
-
-    @ObservationIgnored nonisolated(unsafe) private var _openAIEmbedBaseURL: String
-    var openAIEmbedBaseURL: String {
-        get { access(keyPath: \.openAIEmbedBaseURL); return _openAIEmbedBaseURL }
-        set {
-            withMutation(keyPath: \.openAIEmbedBaseURL) {
-                _openAIEmbedBaseURL = newValue
-                defaults.set(newValue, forKey: "openAIEmbedBaseURL")
-            }
-        }
-    }
-
-    @ObservationIgnored nonisolated(unsafe) private var _openAIEmbedApiKey: String
-    var openAIEmbedApiKey: String {
-        get { access(keyPath: \.openAIEmbedApiKey); return _openAIEmbedApiKey }
-        set {
-            withMutation(keyPath: \.openAIEmbedApiKey) {
-                _openAIEmbedApiKey = newValue
-                secretStore.save(key: "openAIEmbedApiKey", value: newValue)
-            }
-        }
-    }
-
-    @ObservationIgnored nonisolated(unsafe) private var _openAIEmbedModel: String
-    var openAIEmbedModel: String {
-        get { access(keyPath: \.openAIEmbedModel); return _openAIEmbedModel }
-        set {
-            withMutation(keyPath: \.openAIEmbedModel) {
-                _openAIEmbedModel = newValue
-                defaults.set(newValue, forKey: "openAIEmbedModel")
             }
         }
     }
@@ -452,18 +303,6 @@ final class AppSettings {
             withMutation(keyPath: \.saveAudioRecording) {
                 _saveAudioRecording = newValue
                 defaults.set(newValue, forKey: "saveAudioRecording")
-            }
-        }
-    }
-
-    /// When true, uses the LLM to clean up filler words and fix punctuation in real-time.
-    @ObservationIgnored nonisolated(unsafe) private var _enableTranscriptRefinement: Bool
-    var enableTranscriptRefinement: Bool {
-        get { access(keyPath: \.enableTranscriptRefinement); return _enableTranscriptRefinement }
-        set {
-            withMutation(keyPath: \.enableTranscriptRefinement) {
-                _enableTranscriptRefinement = newValue
-                defaults.set(newValue, forKey: "enableTranscriptRefinement")
             }
         }
     }
@@ -555,6 +394,28 @@ final class AppSettings {
         }
     }
 
+    @ObservationIgnored nonisolated(unsafe) private var _kortexSyncEnabled: Bool
+    var kortexSyncEnabled: Bool {
+        get { access(keyPath: \.kortexSyncEnabled); return _kortexSyncEnabled }
+        set {
+            withMutation(keyPath: \.kortexSyncEnabled) {
+                _kortexSyncEnabled = newValue
+                defaults.set(newValue, forKey: "kortexSyncEnabled")
+            }
+        }
+    }
+
+    @ObservationIgnored nonisolated(unsafe) private var _kortexWorkspaceId: String
+    var kortexWorkspaceId: String {
+        get { access(keyPath: \.kortexWorkspaceId); return _kortexWorkspaceId }
+        set {
+            withMutation(keyPath: \.kortexWorkspaceId) {
+                _kortexWorkspaceId = newValue
+                defaults.set(newValue, forKey: "kortexWorkspaceId")
+            }
+        }
+    }
+
     init(storage: AppSettingsStorage = .live()) {
         self.defaults = storage.defaults
         self.secretStore = storage.secretStore
@@ -565,37 +426,27 @@ final class AppSettings {
         if storage.runMigrations {
             Self.migrateFromOldBundleIfNeeded(defaults: defaults)
             Self.migrateFromOpenGranolaIfNeeded(defaults: defaults)
-            Self.migrateKeychainServiceIfNeeded(defaults: defaults)
         }
-
-        self._kbFolderPath = defaults.string(forKey: "kbFolderPath") ?? ""
 
         let defaultNotesPath = storage.defaultNotesDirectory.path
         self._notesFolderPath = defaults.string(forKey: "notesFolderPath") ?? defaultNotesPath
         self._selectedModel = defaults.string(forKey: "selectedModel") ?? "google/gemini-3-flash-preview"
-        self._transcriptionLocale = defaults.string(forKey: "transcriptionLocale") ?? "en-US"
+        self._transcriptionLocale = defaults.string(forKey: "transcriptionLocale") ?? "zh"
         self._transcriptionCustomVocabulary = defaults.string(forKey: "transcriptionCustomVocabulary") ?? ""
         self._transcriptionModel = TranscriptionModel(
             rawValue: defaults.string(forKey: "transcriptionModel") ?? ""
-        ) ?? .parakeetV2
+        ) ?? .groq
         self._inputDeviceID = AudioDeviceID(defaults.integer(forKey: "inputDeviceID"))
         self._openRouterApiKey = secretStore.load(key: "openRouterApiKey") ?? ""
         self._groqApiKey = secretStore.load(key: "groqApiKey") ?? ""
         self._zaiApiKey = secretStore.load(key: "zaiApiKey") ?? ""
-        self._voyageApiKey = secretStore.load(key: "voyageApiKey") ?? ""
         self._llmProvider = LLMProvider(rawValue: defaults.string(forKey: "llmProvider") ?? "") ?? .openRouter
-        self._embeddingProvider = EmbeddingProvider(rawValue: defaults.string(forKey: "embeddingProvider") ?? "") ?? .voyageAI
         self._ollamaBaseURL = defaults.string(forKey: "ollamaBaseURL") ?? "http://localhost:11434"
         self._ollamaLLMModel = defaults.string(forKey: "ollamaLLMModel") ?? "qwen3:8b"
-        self._ollamaEmbedModel = defaults.string(forKey: "ollamaEmbedModel") ?? "nomic-embed-text"
         self._mlxBaseURL = defaults.string(forKey: "mlxBaseURL") ?? "http://localhost:8080"
         self._mlxModel = defaults.string(forKey: "mlxModel") ?? "mlx-community/Llama-3.2-3B-Instruct-4bit"
-        self._openAIEmbedBaseURL = defaults.string(forKey: "openAIEmbedBaseURL") ?? "http://localhost:8080"
-        self._openAIEmbedApiKey = secretStore.load(key: "openAIEmbedApiKey") ?? ""
-        self._openAIEmbedModel = defaults.string(forKey: "openAIEmbedModel") ?? "text-embedding-3-small"
         self._hasAcknowledgedRecordingConsent = defaults.bool(forKey: "hasAcknowledgedRecordingConsent")
         self._saveAudioRecording = defaults.bool(forKey: "saveAudioRecording")
-        self._enableTranscriptRefinement = defaults.bool(forKey: "enableTranscriptRefinement")
 
         // Default to true (shown) if key has never been set
         if defaults.object(forKey: "showLiveTranscript") == nil {
@@ -620,6 +471,8 @@ final class AppSettings {
             ? defaults.integer(forKey: "silenceTimeoutMinutes") : 15
         self._customMeetingAppBundleIDs = defaults.stringArray(forKey: "customMeetingAppBundleIDs") ?? []
         self._detectionLogEnabled = defaults.bool(forKey: "detectionLogEnabled")
+        self._kortexSyncEnabled = defaults.bool(forKey: "kortexSyncEnabled")
+        self._kortexWorkspaceId = defaults.string(forKey: "kortexWorkspaceId") ?? ""
 
         // Default to true (hidden) if key has never been set
         if defaults.object(forKey: "hideFromScreenShare") == nil {
@@ -657,9 +510,8 @@ final class AppSettings {
         guard let oldDefaults = UserDefaults(suiteName: "com.onthespot.app") else { return }
 
         let keysToMigrate = [
-            "kbFolderPath", "selectedModel", "transcriptionLocale", "transcriptionModel", "inputDeviceID",
-            "llmProvider", "embeddingProvider", "ollamaBaseURL", "ollamaLLMModel",
-            "ollamaEmbedModel", "hideFromScreenShare",
+            "selectedModel", "transcriptionLocale", "transcriptionModel", "inputDeviceID",
+            "llmProvider", "ollamaBaseURL", "ollamaLLMModel", "hideFromScreenShare",
             "isTranscriptExpanded", "hasCompletedOnboarding",
             "autoDetectMeetings", "saveAudioRecording"
         ]
@@ -671,7 +523,7 @@ final class AppSettings {
 
         // Migrate Keychain entries from old service
         let oldService = "com.onthespot.app"
-        let keychainKeys = ["openRouterApiKey", "groqApiKey", "zaiApiKey", "voyageApiKey"]
+        let keychainKeys = ["openRouterApiKey", "groqApiKey", "zaiApiKey"]
         for key in keychainKeys {
             if KeychainHelper.load(key: key) == nil,
                let oldValue = Self.loadKeychain(service: oldService, key: key) {
@@ -694,9 +546,8 @@ final class AppSettings {
         }
 
         let keysToMigrate = [
-            "kbFolderPath", "selectedModel", "transcriptionLocale", "transcriptionModel", "inputDeviceID",
-            "llmProvider", "embeddingProvider", "ollamaBaseURL", "ollamaLLMModel",
-            "ollamaEmbedModel", "hideFromScreenShare",
+            "selectedModel", "transcriptionLocale", "transcriptionModel", "inputDeviceID",
+            "llmProvider", "ollamaBaseURL", "ollamaLLMModel", "hideFromScreenShare",
             "isTranscriptExpanded", "hasCompletedOnboarding",
             "hasAcknowledgedRecordingConsent", "autoDetectMeetings", "saveAudioRecording"
         ]
@@ -706,32 +557,23 @@ final class AppSettings {
             }
         }
 
-        // --- Migrate Keychain ---
-        let oldService = "com.opengranola.app"
-        let keychainKeys = ["openRouterApiKey", "groqApiKey", "zaiApiKey", "voyageApiKey"]
-        for key in keychainKeys {
-            if KeychainHelper.load(key: key) == nil,
-               let oldValue = Self.loadKeychain(service: oldService, key: key) {
-                KeychainHelper.save(key: key, value: oldValue)
-            }
-        }
-
         // --- Migrate file-backed state ---
         migrateFilesFromOpenGranola(defaults: defaults)
     }
 
-    /// Migrate file-backed state (sessions, templates, KB cache, transcripts)
+    /// Migrate file-backed state (sessions, templates, transcripts)
     /// from ~/Library/Application Support/OpenGranola/ to OpenOats/ and
-    /// handle the implicit KB folder default.
+    /// preserve the notes directory when it already contains transcript archives.
     private static func migrateFilesFromOpenGranola(defaults: UserDefaults) {
         let fm = FileManager.default
         let home = fm.homeDirectoryForCurrentUser
         let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
 
         let oldAppSupportDir = appSupport.appendingPathComponent("OpenGranola")
-        let newAppSupportDir = appSupport.appendingPathComponent("OpenOats")
+        let newAppSupportDir =
+            appSupport.appendingPathComponent(KortexOatsIdentity.appSupportFolderName)
 
-        // Migrate Application Support: sessions/, templates.json, kb_cache.json
+        // Migrate Application Support: sessions/ and templates.json
         if fm.fileExists(atPath: oldAppSupportDir.path) {
             try? fm.createDirectory(at: newAppSupportDir, withIntermediateDirectories: true)
 
@@ -749,18 +591,11 @@ final class AppSettings {
                 try? fm.moveItem(at: oldTemplates, to: newTemplates)
             }
 
-            // KB embedding cache
-            let oldCache = oldAppSupportDir.appendingPathComponent("kb_cache.json")
-            let newCache = newAppSupportDir.appendingPathComponent("kb_cache.json")
-            if fm.fileExists(atPath: oldCache.path) && !fm.fileExists(atPath: newCache.path) {
-                try? fm.moveItem(at: oldCache, to: newCache)
-            }
         }
 
-        // KB folder: leave unset by default. Only preserve an explicitly-set path
-        // that pointed at the old OpenGranola directory (user chose it themselves).
         let oldDocDir = home.appendingPathComponent("Documents/OpenGranola")
-        let newDocDir = home.appendingPathComponent("Documents/OpenOats")
+        let newDocDir =
+            home.appendingPathComponent("Documents/\(KortexOatsIdentity.documentsFolderName)")
 
         // Migrate notes folder: if the old default directory has content,
         // use it as the notes folder so transcript archives stay accessible.
@@ -775,10 +610,9 @@ final class AppSettings {
 
         // Migrate transcript archives: move files from ~/Documents/OpenGranola/
         // into ~/Documents/OpenOats/ so new sessions and old archives coexist.
-        // Skip if the old dir is the active KB folder or notes folder (files stay in place).
-        let activeKB = defaults.string(forKey: "kbFolderPath") ?? ""
+        // Skip if the old dir is the active notes folder (files stay in place).
         let activeNotes = defaults.string(forKey: "notesFolderPath") ?? ""
-        if fm.fileExists(atPath: oldDocDir.path) && oldDocDir.path != activeKB && oldDocDir.path != activeNotes {
+        if fm.fileExists(atPath: oldDocDir.path) && oldDocDir.path != activeNotes {
             try? fm.createDirectory(at: newDocDir, withIntermediateDirectories: true)
             if let files = try? fm.contentsOfDirectory(at: oldDocDir, includingPropertiesForKeys: nil) {
                 for file in files where file.pathExtension == "txt" {
@@ -787,24 +621,6 @@ final class AppSettings {
                         try? fm.moveItem(at: file, to: dest)
                     }
                 }
-            }
-        }
-    }
-
-    /// Migrate keychain entries from the old "com.opengranola.app" service to the
-    /// current "com.openoats.app" service. Needed for existing users whose keychain
-    /// was written under the previous bundle ID.
-    private static func migrateKeychainServiceIfNeeded(defaults: UserDefaults) {
-        let migrationKey = "didMigrateKeychainToOpenOats"
-        guard !defaults.bool(forKey: migrationKey) else { return }
-        defer { defaults.set(true, forKey: migrationKey) }
-
-        let oldService = "com.opengranola.app"
-        let keychainKeys = ["openRouterApiKey", "groqApiKey", "zaiApiKey", "voyageApiKey", "openAIEmbedApiKey"]
-        for key in keychainKeys {
-            if KeychainHelper.load(key: key) == nil,
-               let oldValue = loadKeychain(service: oldService, key: key) {
-                KeychainHelper.save(key: key, value: oldValue)
             }
         }
     }
@@ -832,11 +648,6 @@ final class AppSettings {
         }
     }
 
-    var kbFolderURL: URL? {
-        guard !kbFolderPath.isEmpty else { return nil }
-        return URL(fileURLWithPath: kbFolderPath)
-    }
-
     var locale: Locale {
         Locale(identifier: transcriptionLocale)
     }
@@ -861,7 +672,7 @@ final class AppSettings {
 // MARK: - Keychain Helper
 
 enum KeychainHelper {
-    private static let service = "com.openoats.app"
+    private static let service = KortexOatsIdentity.bundleIdentifier
 
     static func save(key: String, value: String) {
         guard let data = value.data(using: .utf8) else { return }

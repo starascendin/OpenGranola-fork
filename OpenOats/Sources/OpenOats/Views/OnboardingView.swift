@@ -7,8 +7,8 @@ struct OnboardingView: View {
     private let steps: [(icon: String, title: String, body: String)] = [
         (
             "waveform.circle",
-            "Welcome to OpenOats",
-            "A real-time meeting copilot that listens to your conversations and generates smart talking points — all running locally on your Mac."
+            "Welcome to \(KortexOatsIdentity.appDisplayName)",
+            "A Mac meeting recorder that auto-detects meetings, starts on time, and streams live transcription while uploading sessions to Kortex."
         ),
         (
             "text.quote",
@@ -16,14 +16,9 @@ struct OnboardingView: View {
             "Your conversation is transcribed in real time. \"You\" captures your mic, \"Them\" captures system audio from the other side. Expand the transcript panel to follow along."
         ),
         (
-            "lightbulb",
-            "AI Suggestions",
-            "As the conversation progresses, OpenOats pulls relevant context from your knowledge base and suggests talking points. The best suggestions surface automatically."
-        ),
-        (
             "rectangle.on.rectangle",
-            "Floating Overlay",
-            "Use the overlay button to pop out a compact floating panel — it stays on top of your meeting app so you can glance at suggestions without switching windows."
+            "Kortex Uploads",
+            "Sign in with your Kortex account, pick a workspace, and each completed session uploads its transcript, metadata, and optional audio recording automatically."
         ),
     ]
 

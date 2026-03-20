@@ -42,7 +42,7 @@ final class SystemAudioCapture: @unchecked Sendable {
         let tapUUID = UUID()
 
         let tapDescription = CATapDescription()
-        tapDescription.name = "OpenOats System Audio"
+        tapDescription.name = "\(KortexOatsIdentity.appDisplayName) System Audio"
         tapDescription.uuid = tapUUID
         tapDescription.processes = Self.currentProcessObjectID().map { [$0] } ?? []
         tapDescription.isPrivate = true
@@ -62,7 +62,7 @@ final class SystemAudioCapture: @unchecked Sendable {
 
         let aggregateUID = UUID().uuidString
         let aggregateDescription: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "OpenOats System Audio",
+            kAudioAggregateDeviceNameKey: "\(KortexOatsIdentity.appDisplayName) System Audio",
             kAudioAggregateDeviceUIDKey: aggregateUID,
             kAudioAggregateDeviceMainSubDeviceKey: outputUID,
             kAudioAggregateDeviceIsPrivateKey: true,
@@ -412,7 +412,7 @@ final class SystemAudioCapture: @unchecked Sendable {
             case .outputDeviceUIDUnavailable(let status):
                 return "Unable to inspect the system output device (OSStatus \(status))."
             case .tapCreationFailed(let status):
-                return "System audio capture could not start. Enable System Audio Recording for OpenOats in System Settings > Privacy & Security (OSStatus \(status))."
+                return "System audio capture could not start. Enable System Audio Recording for \(KortexOatsIdentity.appDisplayName) in System Settings > Privacy & Security (OSStatus \(status))."
             case .aggregateDeviceCreationFailed(let status):
                 return "Unable to create the Core Audio aggregate device (OSStatus \(status))."
             case .tapFormatUnavailable(let status):

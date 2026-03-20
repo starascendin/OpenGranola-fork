@@ -66,13 +66,15 @@ final class AudioRecorder: @unchecked Sendable {
         _ = buffer
     }
 
-    func finalizeRecording() async {
+    func finalizeRecording() async -> URL? {
         lock.withLock {
+            let finalizedURL = fileURL
             file = nil
             if let fileURL {
                 diagLog("[RECORDER] finalized raw mic recording \(fileURL.path)")
             }
             fileURL = nil
+            return finalizedURL
         }
     }
 

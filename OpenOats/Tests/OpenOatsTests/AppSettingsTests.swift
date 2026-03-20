@@ -42,15 +42,13 @@ final class AppSettingsTests: XCTestCase {
 
     func testTranscriptionModelAllCases() {
         let cases = TranscriptionModel.allCases
-        XCTAssertEqual(cases.count, 5)
+        XCTAssertEqual(cases.count, 2)
+        XCTAssertEqual(cases, [.groq, .zai])
     }
 
     func testTranscriptionModelDisplayNames() {
-        XCTAssertEqual(TranscriptionModel.parakeetV2.displayName, "Parakeet TDT v2")
-        XCTAssertEqual(TranscriptionModel.parakeetV3.displayName, "Parakeet TDT v3")
-        XCTAssertEqual(TranscriptionModel.qwen3ASR06B.displayName, "Qwen3 ASR 0.6B")
-        XCTAssertEqual(TranscriptionModel.whisperBase.displayName, "Whisper Base")
-        XCTAssertEqual(TranscriptionModel.whisperSmall.displayName, "Whisper Small")
+        XCTAssertEqual(TranscriptionModel.groq.displayName, "Groq (Whisper Large v3)")
+        XCTAssertEqual(TranscriptionModel.zai.displayName, "ZhipuAI / ZAI")
     }
 
     func testTranscriptionModelRoundTripFromRawValue() {
@@ -61,59 +59,26 @@ final class AppSettingsTests: XCTestCase {
     }
 
     func testTranscriptionModelSupportsExplicitLanguageHint() {
-        XCTAssertTrue(TranscriptionModel.qwen3ASR06B.supportsExplicitLanguageHint)
-        XCTAssertFalse(TranscriptionModel.parakeetV2.supportsExplicitLanguageHint)
-        XCTAssertFalse(TranscriptionModel.parakeetV3.supportsExplicitLanguageHint)
-        XCTAssertFalse(TranscriptionModel.whisperBase.supportsExplicitLanguageHint)
-        XCTAssertFalse(TranscriptionModel.whisperSmall.supportsExplicitLanguageHint)
+        XCTAssertTrue(TranscriptionModel.groq.supportsExplicitLanguageHint)
+        XCTAssertTrue(TranscriptionModel.zai.supportsExplicitLanguageHint)
     }
 
-    func testTranscriptionModelWhisperVariant() {
-        XCTAssertNotNil(TranscriptionModel.whisperBase.whisperVariant)
-        XCTAssertNotNil(TranscriptionModel.whisperSmall.whisperVariant)
-        XCTAssertNil(TranscriptionModel.parakeetV2.whisperVariant)
-        XCTAssertNil(TranscriptionModel.parakeetV3.whisperVariant)
-        XCTAssertNil(TranscriptionModel.qwen3ASR06B.whisperVariant)
-    }
-
-    func testTranscriptionModelDownloadPromptNotEmpty() {
+    func testTranscriptionModelDownloadPromptEmpty() {
         for model in TranscriptionModel.allCases {
-            XCTAssertFalse(model.downloadPrompt.isEmpty, "\(model) should have a download prompt")
+            XCTAssertTrue(model.downloadPrompt.isEmpty)
         }
     }
 
     func testTranscriptionModelLocaleFieldTitle() {
-        XCTAssertEqual(TranscriptionModel.qwen3ASR06B.localeFieldTitle, "Language Hint")
-        XCTAssertEqual(TranscriptionModel.parakeetV2.localeFieldTitle, "Locale")
-        XCTAssertEqual(TranscriptionModel.whisperBase.localeFieldTitle, "Locale")
-    }
-
-    // MARK: - EmbeddingProvider
-
-    func testEmbeddingProviderAllCases() {
-        let cases = EmbeddingProvider.allCases
-        XCTAssertEqual(cases.count, 3)
-    }
-
-    func testEmbeddingProviderDisplayNames() {
-        XCTAssertEqual(EmbeddingProvider.voyageAI.displayName, "Voyage AI")
-        XCTAssertEqual(EmbeddingProvider.ollama.displayName, "Ollama")
-        XCTAssertEqual(EmbeddingProvider.openAICompatible.displayName, "OpenAI Compatible")
-    }
-
-    func testEmbeddingProviderRoundTrip() {
-        for provider in EmbeddingProvider.allCases {
-            let restored = EmbeddingProvider(rawValue: provider.rawValue)
-            XCTAssertEqual(restored, provider)
-        }
+        XCTAssertEqual(TranscriptionModel.groq.localeFieldTitle, "Language")
+        XCTAssertEqual(TranscriptionModel.zai.localeFieldTitle, "Language")
     }
 
     // MARK: - AppSettings Defaults
 
     func testAppSettingsDefaultTranscriptionLocale() {
         let settings = AppSettings()
-        // Default locale should be en-US unless previously set
-        XCTAssertFalse(settings.transcriptionLocale.isEmpty)
+        XCTAssertEqual(settings.transcriptionLocale, "zh")
     }
 
     func testAppSettingsLocaleProperty() {
@@ -122,20 +87,13 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertFalse(locale.identifier.isEmpty)
     }
 
-    func testAppSettingsKbFolderURLWhenEmpty() {
+    func testAppSettingsDefaultsToGroq() {
         let settings = AppSettings()
-        let originalPath = settings.kbFolderPath
-        settings.kbFolderPath = ""
-        XCTAssertNil(settings.kbFolderURL)
-        settings.kbFolderPath = originalPath
+        XCTAssertEqual(settings.transcriptionModel, .groq)
     }
 
-    func testAppSettingsKbFolderURLWhenSet() {
+    func testAppSettingsNotesFolderPathIsConfigured() {
         let settings = AppSettings()
-        let originalPath = settings.kbFolderPath
-        settings.kbFolderPath = "/tmp/test-kb"
-        XCTAssertNotNil(settings.kbFolderURL)
-        XCTAssertEqual(settings.kbFolderURL?.path, "/tmp/test-kb")
-        settings.kbFolderPath = originalPath
+        XCTAssertFalse(settings.notesFolderPath.isEmpty)
     }
 }

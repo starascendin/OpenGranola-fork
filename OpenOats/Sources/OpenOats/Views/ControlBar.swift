@@ -4,12 +4,9 @@ struct ControlBar: View {
     let isRunning: Bool
     let audioLevel: Float
     let modelDisplayName: String
-    let transcriptionPrompt: String
     let statusMessage: String?
     let errorMessage: String?
-    let needsDownload: Bool
     let onToggle: () -> Void
-    let onConfirmDownload: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,24 +18,6 @@ struct ControlBar: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 4)
-            }
-
-            // Download prompt
-            if needsDownload && !isRunning {
-                VStack(spacing: 6) {
-                    Text(transcriptionPrompt)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Button("Download Now") {
-                        onConfirmDownload()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
             }
 
             // Status message (model loading, etc.)

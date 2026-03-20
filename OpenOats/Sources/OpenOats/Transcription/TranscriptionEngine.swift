@@ -53,18 +53,6 @@ final class TranscriptionEngine {
         set { withMutation(keyPath: \.lastError) { _lastError = newValue } }
     }
 
-    @ObservationIgnored nonisolated(unsafe) private var _needsModelDownload = false
-    var needsModelDownload: Bool {
-        get { access(keyPath: \.needsModelDownload); return _needsModelDownload }
-        set { withMutation(keyPath: \.needsModelDownload) { _needsModelDownload = newValue } }
-    }
-
-    @ObservationIgnored nonisolated(unsafe) private var _downloadConfirmed = false
-    var downloadConfirmed: Bool {
-        get { access(keyPath: \.downloadConfirmed); return _downloadConfirmed }
-        set { withMutation(keyPath: \.downloadConfirmed) { _downloadConfirmed = newValue } }
-    }
-
     private let systemCapture = SystemAudioCapture()
     private let micCapture = MicCapture()
     private let transcriptStore: TranscriptStore
@@ -117,22 +105,9 @@ final class TranscriptionEngine {
         self.transcriptStore = transcriptStore
         self.settings = settings
         self.mode = mode
-        switch mode {
-        case .live:
-            self.needsModelDownload = Self.modelNeedsDownload(settings.transcriptionModel)
-        case .scripted:
-            self.needsModelDownload = false
-        }
     }
 
-    func refreshModelAvailability() {
-        switch mode {
-        case .live:
-            needsModelDownload = Self.modelNeedsDownload(settings.transcriptionModel)
-        case .scripted:
-            needsModelDownload = false
-        }
-    }
+    func refreshModelAvailability() {}
 
     func start(
         locale: Locale,
@@ -145,7 +120,6 @@ final class TranscriptionEngine {
         refreshModelAvailability()
 
         if case .scripted(let scriptedUtterances) = mode {
-            downloadConfirmed = false
             assetStatus = "Transcribing (UI Test)"
             isRunning = true
             for utterance in scriptedUtterances {
@@ -154,28 +128,12 @@ final class TranscriptionEngine {
             return
         }
 
-        if let localeMismatchMessage = localeMismatchMessage(
-            for: locale,
-            transcriptionModel: transcriptionModel
-        ) {
-            lastError = localeMismatchMessage
-            assetStatus = "Ready"
-            return
-        }
-
-        // Block start if models need downloading and user hasn't confirmed
-        if needsModelDownload && !downloadConfirmed {
-            return
-        }
-
         guard await ensureMicrophonePermission() else { return }
 
         isRunning = true
 
         // 1. Load transcription models via backend protocol
-        assetStatus = needsModelDownload
-            ? "Downloading \(transcriptionModel.displayName)..."
-            : "Loading \(transcriptionModel.displayName)..."
+        assetStatus = "Loading \(transcriptionModel.displayName)..."
         diagLog("[ENGINE-1] loading transcription model \(transcriptionModel.rawValue)...")
         do {
             let vocab = settings.transcriptionCustomVocabulary
@@ -191,27 +149,19 @@ final class TranscriptionEngine {
             }
             self.micBackend = mic
 
-            // Parakeet needs a separate backend for system audio (mutable decoder state).
-            // Qwen3 is actor-based and thread-safe, so reuse the same instance.
-            if transcriptionModel == .qwen3ASR06B {
-                self.systemBackend = mic
-            } else {
-                let sys = transcriptionModel.makeBackend(
-                    customVocabulary: vocab,
-                    groqApiKey: settings.groqApiKey,
-                    zaiApiKey: settings.zaiApiKey
-                )
-                try await sys.prepare { _ in }
-                self.systemBackend = sys
-            }
+            let sys = transcriptionModel.makeBackend(
+                customVocabulary: vocab,
+                groqApiKey: settings.groqApiKey,
+                zaiApiKey: settings.zaiApiKey
+            )
+            try await sys.prepare { _ in }
+            self.systemBackend = sys
 
             assetStatus = "Loading VAD model..."
             diagLog("[ENGINE-1b] loading VAD model...")
             let vad = try await VadManager()
             self.vadManager = vad
 
-            needsModelDownload = false
-            downloadConfirmed = false
             assetStatus = "Models ready"
             diagLog("[ENGINE-2] transcription model loaded")
         } catch {
@@ -674,14 +624,6 @@ final class TranscriptionEngine {
         return "No default microphone is currently available."
     }
 
-    private static func modelNeedsDownload(_ model: TranscriptionModel) -> Bool {
-        let backend = model.makeBackend()
-        if case .needsDownload = backend.checkStatus() {
-            return true
-        }
-        return false
-    }
-
     /// Wrap an audio stream to forward each buffer to a synchronous tap before yielding it downstream.
     private nonisolated static func tappedStream(
         _ stream: AsyncStream<AVAudioPCMBuffer>,
@@ -699,26 +641,6 @@ final class TranscriptionEngine {
             continuation.finish()
         }
         return output
-    }
-
-    private func localeMismatchMessage(
-        for locale: Locale,
-        transcriptionModel: TranscriptionModel
-    ) -> String? {
-        guard transcriptionModel == .parakeetV2,
-              let languageCode = normalizedLanguageCode(for: locale),
-              languageCode != "en"
-        else {
-            return nil
-        }
-
-        let localeIdentifier = locale.identifier.replacingOccurrences(of: "_", with: "-")
-        return "Parakeet TDT v2 is English-only. Switch to Parakeet TDT v3 or Qwen3 ASR for \(localeIdentifier)."
-    }
-
-    private func normalizedLanguageCode(for locale: Locale) -> String? {
-        let identifier = locale.identifier.replacingOccurrences(of: "_", with: "-")
-        return identifier.split(separator: "-").first.map { String($0).lowercased() }
     }
 
     private func clearSystemAudioErrorIfPresent() {

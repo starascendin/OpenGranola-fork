@@ -8,8 +8,7 @@ actor TranscriptLogger {
     private var sessionHeader: String = ""
 
     init(directory: URL? = nil) {
-        self.directory = directory ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Documents/OpenOats", isDirectory: true)
+        self.directory = directory ?? KortexOatsIdentity.defaultNotesDirectory()
         try? FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
         Self.dropMetadataNeverIndex(in: self.directory)
     }
@@ -38,7 +37,7 @@ actor TranscriptLogger {
         let headerFmt = DateFormatter()
         headerFmt.dateStyle = .medium
         headerFmt.timeStyle = .short
-        sessionHeader = "OpenOats - \(headerFmt.string(from: now))\n\n"
+        sessionHeader = "\(KortexOatsIdentity.appDisplayName) - \(headerFmt.string(from: now))\n\n"
 
         FileManager.default.createFile(atPath: currentFile!.path, contents: sessionHeader.data(using: .utf8),
                                        attributes: [.posixPermissions: 0o600])

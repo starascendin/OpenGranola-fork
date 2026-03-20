@@ -28,7 +28,7 @@ final class AppUpdaterController {
     private func presentStartupError() {
         let alert = NSAlert()
         alert.messageText = "Unable to Check For Updates"
-        alert.informativeText = "The updater failed to start. Please verify you have the latest version of OpenOats and contact the developer if the issue persists."
+        alert.informativeText = "The updater failed to start. Please verify you have the latest version of \(KortexOatsIdentity.appDisplayName) and contact the developer if the issue persists."
         alert.runModal()
     }
 }
