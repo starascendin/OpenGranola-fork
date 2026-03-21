@@ -501,13 +501,15 @@ final class AppCoordinator {
 
     private func handleMeetingEnded() async {
         // If we're recording an auto-detected session, stop it
-        if case .recording(let metadata) = state {
-            if case .appLaunched = metadata.detectionContext?.signal {
-                if activeSettings?.detectionLogEnabled == true {
-                    logger.info("Meeting app exited, stopping session")
-                }
-                handle(.userStopped)
+        guard case .recording(let metadata) = state else { return }
+        switch metadata.detectionContext?.signal {
+        case .appLaunched, .audioActivity:
+            if activeSettings?.detectionLogEnabled == true {
+                logger.info("Meeting ended, stopping session")
             }
+            handle(.userStopped)
+        default:
+            break
         }
     }
 
